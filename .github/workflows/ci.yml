@@ -11,6 +11,8 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false  # a known-flaky/broken leg (e.g. 3.14's pydantic runner issue) must not
+                         # cancel the other legs before they get a chance to report their own result
       matrix:
         # 2026-07-31 cost reduction: macOS runner-minutes bill at 10x the Linux rate, and today's
         # usage spike (many individual pushes during a busy session) burned through the monthly
