@@ -25,7 +25,6 @@ the path doesn't exist / retries are exhausted.
 import json
 import os
 import socket
-import struct
 import threading
 import uuid
 
@@ -76,6 +75,7 @@ class _FakeConn:
         self.fail_times = fail_times
         self.connect_calls = 0
         self.sendall_calls = 0
+        self.sent: list[bytes] = []
 
     def settimeout(self, timeout):
         pass
@@ -88,6 +88,7 @@ class _FakeConn:
         if self.fail_times > 0:
             self.fail_times -= 1
             raise BrokenPipeError("simulated broken pipe")
+        self.sent.append(data)
 
     def recv(self, bufsize):
         return b'{"type":"ack"}\n'
@@ -125,92 +126,71 @@ def test_send_moshi_envelope_success_reads_ack(short_sock_path, monkeypatch):
     assert received[0]["eventName"] == "fleet.task_complete"
 
 
-def test_send_moshi_envelope_recovers_from_broken_pipe_via_retry(short_sock_path, monkeypatch):
-    """Reproduce a broken pipe: the daemon disconnects immediately after its
-    first accept (simulating a daemon restart/connection drop), and only
-    handshakes normally on the second try. Verifies delivery still succeeds
-    after retry, so the notification is no longer silently lost."""
-    sock_path = short_sock_path
-    received = []
-    attempts = {"n": 0}
+def test_send_moshi_envelope_recovers_from_broken_pipe_via_retry(tmp_path, monkeypatch):
+    """Reproduce a broken pipe on the first attempt, handshake normally on
+    the second. Verifies delivery still succeeds after retry, so the
+    notification is no longer silently lost.
 
-    def handler(conn):
-        attempts["n"] += 1
-        if attempts["n"] == 1:
-            # Force an RST (hard reset) instead of a graceful FIN: once the
-            # connection actually closes, a zero SO_LINGER timeout guarantees
-            # the client's next sendall/recv sees an immediate error rather
-            # than a silent EOF that could be mistaken for success (a plain
-            # close() only *sometimes* surfaces as BrokenPipeError, depending
-            # on platform socket semantics).
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-            conn.close()
-            return
-        conn.settimeout(2)
-        buf = b""
-        while b"\n" not in buf:
-            chunk = conn.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-        received.append(json.loads(buf.decode("utf-8").strip()))
-        conn.sendall(b'{"type":"ack"}\n')
+    Uses _FakeConn (pure object mocking, no real socket/background thread)
+    rather than a real Unix socket with an accept-then-close daemon thread:
+    the real-socket version raced the client's sendall() against the daemon
+    thread's own scheduling to accept()+close() first, and _send_moshi_envelope
+    only cares whether sendall() itself raises -- any error from the
+    subsequent recv() (the ack read) is caught by its own inner
+    `except OSError: pass` and does NOT affect the return value, so forcing
+    an RST on close() doesn't help either. This was flaky in real CI (a
+    thread-scheduling race that a fast/local machine rarely loses but a
+    loaded CI runner does) even after that RST fix. _FakeConn removes the
+    race entirely by controlling exactly which sendall() call fails.
+    """
+    sock_path = str(tmp_path / "moshi-hook.sock")
+    (tmp_path / "moshi-hook.sock").touch()  # only needs to pass os.path.exists
 
-    _start_fake_moshi_daemon(sock_path, handler, accepts=2)
+    fake_conn = _FakeConn(fail_times=1)
+    monkeypatch.setattr(router.socket, "socket", lambda *a, **kw: fake_conn)
     monkeypatch.setenv("MOSHI_SOCKET_PATH", sock_path)
+    monkeypatch.setattr(router.time, "sleep", lambda s: None)
 
-    # The payload is deliberately large enough that the client's sendall()
-    # (multiple syscalls to write ~200KB) takes long enough for the fake
-    # daemon's background thread to actually get scheduled, accept(), and
-    # close() first -- with a tiny payload, the client's single-syscall write
-    # can complete before the daemon thread is even scheduled by the GIL,
-    # making the close() arrive too late to be observed at all (this is a
-    # thread-scheduling race, not a kernel-buffer-size one -- confirmed by
-    # reproducing the failure locally with a small payload even with the
-    # SO_LINGER/RST fix above).
-    big_envelope = {
+    envelope = {
         "type": "session.update",
         "eventName": "fleet.task_complete",
-        "message": "x" * 200_000,
+        "message": "hello",
     }
-    ok = router._send_moshi_envelope(big_envelope, max_retries=3, base_delay=0.01)
+    ok = router._send_moshi_envelope(envelope, max_retries=3, base_delay=0.01)
 
     assert ok is True
-    assert attempts["n"] == 2
-    assert received[0]["eventName"] == "fleet.task_complete"
+    assert fake_conn.sendall_calls == 2
+    assert len(fake_conn.sent) == 1
+    assert json.loads(fake_conn.sent[0].decode("utf-8").strip())["eventName"] == "fleet.task_complete"
 
 
 def test_send_moshi_envelope_gives_up_after_max_retries_and_logs_warning(
-    short_sock_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys
 ):
-    """The daemon keeps disconnecting: after retries are exhausted, return
-    False and explicitly print a warning -- no longer silently swallowed like
-    the old `except Exception: pass`, which let fleet notifications quietly
-    vanish."""
-    sock_path = short_sock_path
-    attempts = {"n": 0}
+    """Every attempt fails: after retries are exhausted, return False and
+    explicitly print a warning -- no longer silently swallowed like the old
+    `except Exception: pass`, which let fleet notifications quietly vanish.
+    See the broken-pipe-recovery test above for why this uses _FakeConn
+    rather than a real socket + background-thread daemon."""
+    sock_path = str(tmp_path / "moshi-hook.sock")
+    (tmp_path / "moshi-hook.sock").touch()
 
-    def handler(conn):
-        attempts["n"] += 1
-        # Force an RST + use a large payload -- see the comments in the
-        # broken-pipe-recovery test above for why both are needed together.
-        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        conn.close()
-
-    _start_fake_moshi_daemon(sock_path, handler, accepts=3)
+    fake_conn = _FakeConn(fail_times=3)
+    monkeypatch.setattr(router.socket, "socket", lambda *a, **kw: fake_conn)
     monkeypatch.setenv("MOSHI_SOCKET_PATH", sock_path)
+    monkeypatch.setattr(router.time, "sleep", lambda s: None)
 
-    big_envelope = {
+    envelope = {
         "type": "session.update",
         "eventName": "fleet.task_complete",
-        "message": "x" * 200_000,
+        "message": "hello",
     }
     ok = router._send_moshi_envelope(
-        big_envelope, max_retries=3, base_delay=0.01, log_prefix="[test-moshi]"
+        envelope, max_retries=3, base_delay=0.01, log_prefix="[test-moshi]"
     )
 
     assert ok is False
-    assert attempts["n"] == 3
+    assert fake_conn.sendall_calls == 3
     captured = capsys.readouterr()
     assert "[test-moshi]" in captured.out
     assert "fleet.task_complete" in captured.out
