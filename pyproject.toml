@@ -1,6 +1,6 @@
 [project]
 name = "herdr-bridge"
-version = "0.5.0"
+version = "0.6.0"
 description = "An AI command tower: when you dip into AI-assisted development, one sentence is enough to dispatch, track, and verify the work"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,7 @@ license = "Apache-2.0"
 authors = [{ name = "Aiken Lin" }]
 keywords = ["herdr", "agent", "orchestration", "terminal", "claude-code", "commander"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Operating System :: POSIX",
   "Programming Language :: Python :: 3 :: Only",
@@ -25,7 +25,8 @@ dependencies = [
     # whole git-dependency saga (git+ssh -> git+https -> waiting on the repo to go
     # public -> --no-sources workaround for the local editable override leaking into
     # CI): a published package resolves the same way everywhere, no special CI
-    # handling needed for this dependency itself.
+    # handling needed for this dependency itself. `[tool.uv.sources]` below still
+    # overrides this with a local editable path for day-to-day development.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
     "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
     # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
@@ -40,6 +41,22 @@ dependencies = [
     # lightweight (pure Python, a 6-package dependency tree, negligible install time).
     "agent-client-protocol>=0.10.0,<0.12",
 ]
+
+[tool.uv.sources]
+# Embed RemaGraph for local development (governance layer only): takes precedence
+# over the PyPI version constraint above during a local `uv sync`. After `uv sync`,
+# `import remagraph` works directly (editable mode so changes show up immediately).
+#
+# 2026-07-31 hard-won lesson: this override applies unconditionally, in CI too, not
+# just locally — `uv sync --dev` in CI would try to resolve the adjacent ../RemaGraph
+# directory, which only exists on the maintainer's machine, and fail. Moving this
+# into an untracked uv.toml isn't possible either: uv explicitly rejects a `sources`
+# field there, it's only allowed in pyproject.toml. The correct approach: keep
+# running plain `uv sync --dev` locally (which applies this override); CI uses
+# `uv sync --dev --no-sources` (and every subsequent `uv run`/`uv build` call also
+# needs the flag — see .github/workflows/*.yml) so it resolves the normal PyPI
+# package instead.
+remagraph = { path = "../RemaGraph", editable = true }
 
 [project.scripts]
 herdr-commander = "herdr_bridge.light.cli:main"
@@ -95,6 +112,7 @@ addopts = [
 markers = [
   "integration: requires a real local herdr server (CI deselects these)",
   "empirical: requires a real herdr server for semantic verification (CI deselects these)",
+  "dogfood: calls real LLM-backed agent CLIs, costs money (CI deselects these; see tests/dogfooding/RUNBOOK.md)",
 ]
 
 [tool.coverage.run]
