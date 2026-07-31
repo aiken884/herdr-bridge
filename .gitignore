@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.superpowers/
+.claude/
+.codegraph/
+.omo/
+.vendor/
+.coverage
+mutants/
+
+# 本地開發用 git worktree（不進版控）
+worktrees/

@@ -1,0 +1,33 @@
+# herdr-bridge dev dependency vulnerability audit
+# Scans dev dependencies on every push to main / PR, plus a scheduled scan every Monday.
+# Fails on unpatched HIGH or CRITICAL CVEs.
+# herdr-bridge has zero runtime dependencies (dependencies=[]), so this only covers dev deps.
+name: pip-audit
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'          # weekly scan, every Monday at 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  dep-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: "3.11"
+          version: "0.7.x"
+      # --no-sources must be repeated on every uv invocation below — see ci.yml for why the
+      # UV_NO_SOURCES env var doesn't reliably work on the uv 0.7.x pinned here.
+      - run: uv sync --dev --no-sources
+      - name: Run pip-audit (dev deps only)
+        run: |
+          uv pip install pip-audit
+          # zero runtime dependencies, so only export the dev group for scanning
+          uv export --dev --no-emit-project --no-sources > /tmp/req.txt
+          uv run --no-sources pip-audit -r /tmp/req.txt --strict

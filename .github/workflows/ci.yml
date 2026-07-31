@@ -1,0 +1,67 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # 2026-07-31 cost reduction: macOS runner-minutes bill at 10x the Linux rate, and today's
+        # usage spike (many individual pushes during a busy session) burned through the monthly
+        # free allowance largely on macOS minutes. Full Linux coverage across all supported Python
+        # versions is cheap and stays as a cross-product; macOS is trimmed to a single version
+        # (the requires-python floor) purely to catch macOS-specific issues (paths, sockets, etc.)
+        # without paying the 10x multiplier 4 times over. Mirrors a related project's
+        # ci.yml precedent (reduced matrix for the same cost reason).
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.11"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          version: "0.7.x"   # TD-001 P1: pin the uv major version to avoid runner image drift
+      # --no-sources must be repeated on every uv invocation below, not just this one — uv
+      # run/uv build each re-check the environment against pyproject.toml before running, and
+      # without the flag they'd re-apply the local-path [tool.uv.sources] override (a sibling
+      # ../RemaGraph checkout that only exists on the maintainer's machine), failing with
+      # "Distribution not found at: file://.../RemaGraph". The UV_NO_SOURCES env var equivalent
+      # does NOT work on the uv 0.7.x pinned above (confirmed by a live CI run still hitting the
+      # local path with the env var set) — stick to the explicit flag on every command instead.
+      - run: uv sync --dev --no-sources
+      - run: uv run --no-sources ruff check .
+      - run: uv run --no-sources mypy src
+      - name: pytest + coverage
+        run: uv run --no-sources pytest -q --cov=src/herdr_bridge --cov-report=term-missing --cov-fail-under=70 -m "not integration"
+      - run: uv build --no-sources
+      - name: package hygiene — no local logs / review scratch leak into sdist or wheel
+        run: |
+          python3 - <<'PY'
+          import glob, sys, tarfile, zipfile
+          BAD = (".codegraph", "reviews", "misjudge", "daemon.log",
+                 ".dispatch", "docs/superpowers", "sandbox-evidence")
+          def names(p):
+              if p.endswith(".tar.gz"):
+                  with tarfile.open(p) as t: return t.getnames()
+              with zipfile.ZipFile(p) as z: return z.namelist()
+          bad = [f"{p}: {n}" for p in glob.glob("dist/*.tar.gz") + glob.glob("dist/*.whl")
+                 for n in names(p) if any(m in n for m in BAD)]
+          if bad:
+              print("PACKAGE HYGIENE FAIL:"); [print("  ", b) for b in bad]; sys.exit(1)
+          print("package hygiene OK")
+          PY

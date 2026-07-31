@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an additive improvement (the five signatures stay frozen)
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        herdr-bridge is a thin, frozen-surface library. Additive improvements are
+        welcome; changes to the five public signatures require a major version and
+        a strong rationale (see BOUNDARIES.md and ROADMAP.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do that's hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like? Note if it can be additive (no signature change).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

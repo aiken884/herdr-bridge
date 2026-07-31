@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# ── herdr-bridge DCO commit-msg hook ───────────────────────────────────────
+# 依 DCO 1.1（Developer Certificate of Origin）：每個 commit 必須含
+# Signed-off-by trailer，代表貢獻者認證其貢獻的來源與授權合規。
+#
+# 此 hook 檢查 commit message 是否含 Signed-off-by: Name <email>。
+# 缺則阻擋（exit 1）並提示貢獻者手動加入。
+#
+# 相容：bash 3.2+（macOS 內建 bash）、無外部依賴
+# 安裝：見 .githooks/README.md（建議 `bash .githooks/install.sh`）
+# ──────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+[[ -f "$COMMIT_MSG_FILE" ]] || { echo "commit-msg: $COMMIT_MSG_FILE 不存在" >&2; exit 1; }
+
+MSG=$(cat "$COMMIT_MSG_FILE")
+
+# ── 分離 body / comment ──────────────────────────────────────────────────
+# Git 以 # 開頭的行是註解；只檢查 body（實際 commit message），不檢查註解區。
+comment_ln=$(echo "$MSG" | awk '/^#/{print NR; exit}')
+if [[ -n "$comment_ln" ]]; then
+    body=$(echo "$MSG" | head -n $((comment_ln - 1)))
+else
+    body="$MSG"
+fi
+
+# ── 檢查 Signed-off-by ────────────────────────────────────────────────────
+if echo "$body" | grep -qiE '^Signed-off-by:' >/dev/null 2>&1; then
+    exit 0
+fi
+
+# ── 缺 DCO → 阻擋並提示 ──────────────────────────────────────────────────
+cat >&2 <<'EOF'
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  DCO REQUIRED — this commit is missing a Signed-off-by trailer.             ║
+║                                                                              ║
+║  herdr-bridge requires all commits to carry a Developer Certificate of       ║
+║  Origin (DCO 1.1) sign-off.  By adding your Signed-off-by, you certify:      ║
+║                                                                              ║
+║    (a) The contribution was created in whole or in part by you and you       ║
+║        have the right to submit it under the open source license; or         ║
+║    (b) The contribution is based upon previous work that is covered by       ║
+║        a compatible open source license and you have the right to submit.    ║
+║                                                                              ║
+║  To fix: amend your commit message to include a trailer line like:           ║
+║                                                                              ║
+║    Signed-off-by: Your Name <your.email@example.com>                         ║
+║                                                                              ║
+║  • git commit --amend -s      (adds sign-off automatically, if configured)  ║
+║  • git commit --amend         (edit message, then add the line manually)    ║
+║                                                                              ║
+║  Docs: https://developercertificate.org                                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+EOF
+exit 1

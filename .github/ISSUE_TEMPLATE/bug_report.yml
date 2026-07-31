@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a defect in herdr-bridge
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** use this for security issues —
+        see SECURITY.md for private reporting.
+  - type: input
+    id: version
+    attributes:
+      label: herdr-bridge version
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: input
+    id: herdr-version
+    attributes:
+      label: Herdr version / protocol
+      placeholder: "0.7.4 / protocol 16"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version & OS
+      placeholder: "3.12 on macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps or code to reproduce. Please redact any sensitive paths/output.
+      render: python
+    validations:
+      required: true

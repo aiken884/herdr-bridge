@@ -1,0 +1,26 @@
+name: publish
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI Trusted Publisher (OIDC) + provenance attestations
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          version: "0.7.x"   # TD-001 P1: pinned to the same version as ci.yml (review X7)
+      # See ci.yml for why this needs the explicit flag rather than the UV_NO_SOURCES env var.
+      - run: uv build --no-sources
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # release/v1
+        with:
+          attestations: true   # SLSA provenance for the published artifacts

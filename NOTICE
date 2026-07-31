@@ -1,0 +1,17 @@
+herdr-bridge
+Copyright 2026 Aiken Lin
+
+This product is an independent client of the Herdr socket API.
+It does not contain, copy, or derive from Herdr source code.
+As of the last released Herdr version, Herdr is a separate project licensed
+under AGPL-3.0-or-later. Note: as of 2026-07-30, Herdr's own upstream
+changelog (docs/next/CHANGELOG.md, "Unreleased" section) records an intent
+to relicense to Apache-2.0; this has not yet shipped in a tagged release.
+Re-verify Herdr's current license before relying on this notice.
+
+This product's "Herdr Bridge Memory" feature is powered by RemaGraph, a
+separate, independently-published open-source project (PyPI package
+`remagraph`, https://github.com/aiken884/remagraph). RemaGraph is depended
+on as an ordinary package dependency (see pyproject.toml); this product
+does not copy or vendor its source. Re-verify RemaGraph's current license
+before relying on this notice.

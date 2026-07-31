@@ -1,0 +1,28 @@
+name: mutmut-gate
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-testing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081  # v5
+        with:
+          python-version: "3.12"
+          version: "0.7.x"
+      # --no-sources must be repeated on every uv invocation below — see ci.yml for why the
+      # UV_NO_SOURCES env var doesn't reliably work on the uv 0.7.x pinned here.
+      - run: uv sync --dev --no-sources
+      - run: uv run --no-sources mutmut run
+      - name: mutation score ≥ 0% (placeholder gate)
+        run: |
+          uv run --no-sources mutmut results | tee mutmut-results.txt
+          echo "mutmut-gate: baseline checkpoint only (see mutmut-results.txt)"

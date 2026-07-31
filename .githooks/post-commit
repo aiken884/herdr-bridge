@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# ── herdr-bridge post-commit → RemaGraph 記憶寫回 hook ─────────────────────
+# 章程 §3.5.9 第 4 點：「回收前必寫」不靠 agent 自己記得收工時手動呼叫
+# `remagraph store`，而是把它嵌進 commit 流程本身，變成 commit 這個動作
+# 自帶的副作用。
+#
+# agent-agnostic：純 shell + git 原生機制，任何底層 agent（Claude Code、
+# OpenCode、Grok、Codex、AGY……）只要執行了 `git commit`，就會觸發，不需要
+# agent 本身認識 RemaGraph。
+#
+# 安全原則（不可違反）：
+#   1. 沒裝 remagraph → 靜默略過，僅印一行提示到 stderr，commit 正常完成。
+#   2. 任何內部錯誤都要被捕捉，不得讓使用者看到 stack trace，也不得讓
+#      commit 失敗（post-commit 本來就無法阻擋 commit，但仍要求乾淨降級）。
+#
+# 相容：bash 3.2+（macOS 內建 bash）、無外部依賴（純 git + coreutils）
+# 安裝：見 .githooks/README.md（建議 `bash .githooks/install.sh`）
+# ──────────────────────────────────────────────────────────────────────────
+
+set -uo pipefail
+
+# ── 小工具：slugify（符合 RemaGraph project_id/task_id/agent_id 格式）────
+# RemaGraph 規則：^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$；agent_id 另外要求
+# 全小寫、長度 3–64（^[a-z0-9_-]+$）。這裡一律轉小寫、輸出同時滿足兩者。
+_slugify() {
+    local input="$1" fallback="$2" s
+    s=$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E 's/[^a-z0-9_-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')
+    if [[ -z "$s" ]]; then
+        s="$fallback"
+    fi
+    while [[ ${#s} -lt 3 ]]; do
+        s="${s}0"
+    done
+    if [[ ! "$s" =~ ^[a-z0-9] ]]; then
+        s="a${s}"
+    fi
+    printf '%.64s' "$s"
+}
+
+# ── 小工具：JSON 字串 escape（不含前後引號）──────────────────────────────
+_json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\r'/}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+# ── 小工具：把換行分隔的清單包成 JSON 字串陣列 ───────────────────────────
+_to_json_array() {
+    local line esc json="[" first=1
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        esc=$(_json_escape "$line")
+        if [[ $first -eq 1 ]]; then
+            json="${json}\"${esc}\""
+            first=0
+        else
+            json="${json},\"${esc}\""
+        fi
+    done
+    json="${json}]"
+    printf '%s' "$json"
+}
+
+main() {
+    if ! command -v remagraph >/dev/null 2>&1; then
+        echo "post-commit: remagraph not installed, skipping memory write-back (does not affect this commit)" >&2
+        return 0
+    fi
+
+    local commit_hash short_hash subject branch
+    commit_hash=$(git rev-parse HEAD 2>/dev/null) || { echo "post-commit: 無法取得 commit hash，略過" >&2; return 0; }
+    short_hash=$(git rev-parse --short HEAD 2>/dev/null) || short_hash="${commit_hash:0:7}"
+    subject=$(git log -1 --format=%s HEAD 2>/dev/null)
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch="HEAD"
+
+    # ── project_id：從「主 repo」目錄名推導，worktree 安全 ──────────────
+    # git worktree 底下 `git rev-parse --show-toplevel` 回傳的是 worktree
+    # 自己的目錄（例如 worktrees/commit-hook-remagraph），不是主 repo 名稱
+    # （herdr-bridge）。用 --git-common-dir（所有 worktree 共用的 .git）
+    # 往上一層才能拿到真正的主 repo 目錄名稱。
+    local common_dir project_root project_id
+    common_dir=$(git rev-parse --git-common-dir 2>/dev/null) || { echo "post-commit: 無法取得 git-common-dir，略過" >&2; return 0; }
+    case "$common_dir" in
+        /*) : ;;
+        *) common_dir="$(pwd)/$common_dir" ;;
+    esac
+    common_dir=$(cd "$common_dir" 2>/dev/null && pwd) || { echo "post-commit: 無法解析 git-common-dir，略過" >&2; return 0; }
+    project_root=$(dirname "$common_dir")
+    project_id=$(_slugify "$(basename "$project_root")" "project")
+
+    local task_id
+    task_id=$(_slugify "${project_id}-commit-${short_hash}" "commit-task")
+
+    local agent_id_raw agent_id
+    agent_id_raw="${AGENT_ID:-$(git config user.name 2>/dev/null)}"
+    agent_id=$(_slugify "$agent_id_raw" "git-committer")
+
+    # ── summary：保證 ASCII 基底 > 30 字元，滿足 RemaGraph 仲裁規則 #1 ───
+    # （remagraph store 本身不會像 `remagraph auto` 一樣自動補長度）
+    local summary
+    summary="Commit ${short_hash} (${commit_hash}) on branch ${branch} in ${project_id}: ${subject}"
+
+    # ── learnings：至少一筆非空內容（仲裁規則 #2 對所有 kind 都強制）───
+    local changed_files learnings_json
+    changed_files=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)
+    if [[ -n "$changed_files" ]]; then
+        learnings_json=$(printf '%s\n' "$changed_files" | _to_json_array)
+    else
+        learnings_json='[]'
+    fi
+    if [[ "$learnings_json" == "[]" ]]; then
+        learnings_json='["auto-captured via git post-commit hook (no file diff)"]'
+    fi
+
+    local handoff_note
+    handoff_note=$(git log -1 --format=%B HEAD 2>/dev/null)
+
+    # ── 逾時保護（2026-07-25 #62 血證）────────────────────────────────────
+    # remagraph store 內部經由 model2vec 對 HuggingFace Hub 發出網路請求
+    # （即使模型已本地快取，仍會做一次線上驗證請求），這條路徑完全沒有
+    # timeout 保護；實測在完全無並行 git 操作的情況下，單獨執行都能重現
+    # 30 秒以上的逾時。commit 成功必須優先於記憶寫入成功——post-commit hook
+    # 絕不能讓 git commit 因為這類外部依賴而無限期 hang。
+    #
+    # 不依賴外部 timeout/gtimeout 指令（macOS 預設沒有 GNU coreutils），改用
+    # 背景執行 + 獨立 watcher 行程在逾時後送 SIGTERM 的 bash 原生機制。
+    local store_output store_status store_tmpfile
+    store_tmpfile=$(mktemp 2>/dev/null) || {
+        echo "post-commit: 無法建立暫存檔，略過 remagraph store（不影響本次 commit）" >&2
+        return 0
+    }
+
+    remagraph store \
+        --project "$project_id" \
+        --task-id "$task_id" \
+        --agent-id "$agent_id" \
+        --kind status_update \
+        --summary "$summary" \
+        --learnings "$learnings_json" \
+        --handoff-note "$handoff_note" \
+        >"$store_tmpfile" 2>&1 &
+    local store_pid=$!
+
+    local -r store_timeout_sec=10
+    (
+        sleep "$store_timeout_sec"
+        kill -TERM "$store_pid" 2>/dev/null
+    ) &
+    local watcher_pid=$!
+
+    wait "$store_pid" 2>/dev/null
+    store_status=$?
+
+    # store 已結束（不論正常完成或被逾時 kill），watcher 不再需要，清掉避免殘留。
+    kill "$watcher_pid" 2>/dev/null
+    wait "$watcher_pid" 2>/dev/null
+
+    store_output=$(cat "$store_tmpfile" 2>/dev/null)
+    rm -f "$store_tmpfile"
+
+    if [[ $store_status -ne 0 ]]; then
+        echo "post-commit: remagraph store 失敗或逾時（exit ${store_status}，逾時上限 ${store_timeout_sec}s），已略過，不影響本次 commit" >&2
+        echo "post-commit: 詳細訊息：${store_output}" >&2
+    fi
+
+    return 0
+}
+
+main
+exit 0
