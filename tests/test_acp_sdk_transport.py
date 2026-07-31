@@ -455,6 +455,17 @@ class TestStartPromptWaitDone:
         t.close_session(session)
 
     def test_start_cancel_wait_yields_canceled(self, tmp_path: Path) -> None:
+        """Genuine mid-flight cancellation: cancel() must land while the
+        prompt future is still pending, not after it already completed.
+        Using a plain "hello" prompt (which the fake agent answers near-
+        instantly) made this a real race against subprocess/event-loop
+        scheduling -- flaky under CI load, where the future could already be
+        done by the time cancel() ran (yielding reason="stop" instead of
+        "canceled"). $HANG$ makes the fake agent sleep well past this test's
+        timeout without responding, guaranteeing the future is still pending
+        when cancel() is called, so this deterministically exercises the
+        FutureCancelledError path in wait_done() instead of racing it.
+        """
         t = _transport()
         wd = _make_workdir(tmp_path)
         session = t.ensure_session(
@@ -462,7 +473,7 @@ class TestStartPromptWaitDone:
             policy=AcpPolicy(mode="approve-all"),
         )
 
-        handle = t.start_prompt(session, "hello")
+        handle = t.start_prompt(session, "$HANG$")
         t.cancel(handle)
         result = t.wait_done(handle, timeout_sec=10)
 

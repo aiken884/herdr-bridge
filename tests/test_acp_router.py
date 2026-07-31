@@ -529,6 +529,7 @@ def test_acprouter_can_skip_fleet_listener_side_effect(capsys):
     )
 
 
+@pytest.mark.integration
 def test_fleet_event_listener_stays_connected_with_multiple_panes(capsys):
     """Regression test: herdr's events.subscribe has connection-wide subscription-set
     semantics, so calling it multiple times on the same connection (e.g. subscribing

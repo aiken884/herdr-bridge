@@ -25,6 +25,7 @@ the path doesn't exist / retries are exhausted.
 import json
 import os
 import socket
+import struct
 import threading
 import uuid
 
@@ -136,7 +137,14 @@ def test_send_moshi_envelope_recovers_from_broken_pipe_via_retry(short_sock_path
     def handler(conn):
         attempts["n"] += 1
         if attempts["n"] == 1:
-            conn.close()  # disconnect immediately, triggering a broken pipe on the client's sendall
+            # Force an RST (hard reset) instead of a graceful FIN: once the
+            # connection actually closes, a zero SO_LINGER timeout guarantees
+            # the client's next sendall/recv sees an immediate error rather
+            # than a silent EOF that could be mistaken for success (a plain
+            # close() only *sometimes* surfaces as BrokenPipeError, depending
+            # on platform socket semantics).
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
             return
         conn.settimeout(2)
         buf = b""
@@ -151,10 +159,15 @@ def test_send_moshi_envelope_recovers_from_broken_pipe_via_retry(short_sock_path
     _start_fake_moshi_daemon(sock_path, handler, accepts=2)
     monkeypatch.setenv("MOSHI_SOCKET_PATH", sock_path)
 
-    # The payload is deliberately large enough that the first sendall after the
-    # daemon disconnects is guaranteed to trigger BrokenPipeError (a small
-    # payload might get absorbed by the kernel buffer first, with EPIPE only
-    # surfacing on the next write, which would make the test flaky)
+    # The payload is deliberately large enough that the client's sendall()
+    # (multiple syscalls to write ~200KB) takes long enough for the fake
+    # daemon's background thread to actually get scheduled, accept(), and
+    # close() first -- with a tiny payload, the client's single-syscall write
+    # can complete before the daemon thread is even scheduled by the GIL,
+    # making the close() arrive too late to be observed at all (this is a
+    # thread-scheduling race, not a kernel-buffer-size one -- confirmed by
+    # reproducing the failure locally with a small payload even with the
+    # SO_LINGER/RST fix above).
     big_envelope = {
         "type": "session.update",
         "eventName": "fleet.task_complete",
@@ -179,6 +192,9 @@ def test_send_moshi_envelope_gives_up_after_max_retries_and_logs_warning(
 
     def handler(conn):
         attempts["n"] += 1
+        # Force an RST + use a large payload -- see the comments in the
+        # broken-pipe-recovery test above for why both are needed together.
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         conn.close()
 
     _start_fake_moshi_daemon(sock_path, handler, accepts=3)
