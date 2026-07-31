@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for this project's versioning policy while the version stays pre-1.0.
 
+## [Unreleased]
+
 ## [0.6.0] — 2026-08-01 — Herdr Bridge Memory branding, first public release
 
 ### Added

@@ -3,6 +3,7 @@
 # herdr-bridge
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/herdr-bridge.svg)](https://pypi.org/project/herdr-bridge/)
 [![CI](https://github.com/aiken884/herdr-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aiken884/herdr-bridge/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
