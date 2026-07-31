@@ -15,48 +15,18 @@ classifiers = [
   "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # Embedded RemaGraph (highest-priority decision): herdr-bridge's governance layer,
-    # ACP pipeline, and LightCommander must call into RemaGraph's core directly
-    # (process_store / search_memories / models), not just the CLI fallback.
-    # RemaGraph owns the core memory engine; herdr-bridge owns orchestration + ACP + light UX.
-    #
-    # 2026-07-31: RemaGraph published to PyPI (0.4.0) — switched from a git+https URL
-    # pinned to a commit SHA to a normal PyPI version constraint. This retires the
-    # whole git-dependency saga (git+ssh -> git+https -> waiting on the repo to go
-    # public -> --no-sources workaround for the local editable override leaking into
-    # CI): a published package resolves the same way everywhere, no special CI
-    # handling needed for this dependency itself. `[tool.uv.sources]` below still
-    # overrides this with a local editable path for day-to-day development.
+    # Embedded RemaGraph: herdr-bridge's memory layer, ACP pipeline, and
+    # LightCommander call into RemaGraph's core directly (process_store /
+    # search_memories / models), not just the CLI fallback. RemaGraph owns the
+    # core memory engine; herdr-bridge owns orchestration + ACP + light UX.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
     "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
-    # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
-    # extra): Aiken's business decision — the fleet's goal is fully headless operation,
-    # and this path (dispatching to freshly-spawned headless agent processes) is a
-    # real capability that goal requires. Both blockers that previously held this back
-    # (the opencode skill leak and a user_text NameError) have now been fixed;
-    # examples/acp-echo-agent.py's connection failure could not be reproduced on
-    # re-verification (judged to have been a transient environment issue at the time,
-    # not a persistent bug — see the update in section 7 of
-    # docs/decisions/acp-layer-status-20260725.md). The package itself is very
-    # lightweight (pure Python, a 6-package dependency tree, negligible install time).
+    # ACP SDK: a core dependency, not optional — the fleet's goal is fully
+    # headless operation, and this path (dispatching to freshly-spawned headless
+    # agent processes) is a real capability that goal requires. The package
+    # itself is lightweight (pure Python, a 6-package dependency tree).
     "agent-client-protocol>=0.10.0,<0.12",
 ]
-
-[tool.uv.sources]
-# Embed RemaGraph for local development (governance layer only): takes precedence
-# over the PyPI version constraint above during a local `uv sync`. After `uv sync`,
-# `import remagraph` works directly (editable mode so changes show up immediately).
-#
-# 2026-07-31 hard-won lesson: this override applies unconditionally, in CI too, not
-# just locally — `uv sync --dev` in CI would try to resolve the adjacent ../RemaGraph
-# directory, which only exists on the maintainer's machine, and fail. Moving this
-# into an untracked uv.toml isn't possible either: uv explicitly rejects a `sources`
-# field there, it's only allowed in pyproject.toml. The correct approach: keep
-# running plain `uv sync --dev` locally (which applies this override); CI uses
-# `uv sync --dev --no-sources` (and every subsequent `uv run`/`uv build` call also
-# needs the flag — see .github/workflows/*.yml) so it resolves the normal PyPI
-# package instead.
-remagraph = { path = "../RemaGraph", editable = true }
 
 [project.scripts]
 herdr-commander = "herdr_bridge.light.cli:main"

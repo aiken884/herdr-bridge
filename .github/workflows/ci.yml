@@ -38,19 +38,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           version: "0.7.x"   # TD-001 P1: pin the uv major version to avoid runner image drift
-      # --no-sources must be repeated on every uv invocation below, not just this one — uv
-      # run/uv build each re-check the environment against pyproject.toml before running, and
-      # without the flag they'd re-apply the local-path [tool.uv.sources] override (a sibling
-      # ../RemaGraph checkout that only exists on the maintainer's machine), failing with
-      # "Distribution not found at: file://.../RemaGraph". The UV_NO_SOURCES env var equivalent
-      # does NOT work on the uv 0.7.x pinned above (confirmed by a live CI run still hitting the
-      # local path with the env var set) — stick to the explicit flag on every command instead.
-      - run: uv sync --dev --no-sources
-      - run: uv run --no-sources ruff check .
-      - run: uv run --no-sources mypy src
+      - run: uv sync --dev
+      - run: uv run ruff check .
+      - run: uv run mypy src
       - name: pytest + coverage
-        run: uv run --no-sources pytest -q --cov=src/herdr_bridge --cov-report=term-missing --cov-fail-under=70 -m "not integration"
-      - run: uv build --no-sources
+        run: uv run pytest -q --cov=src/herdr_bridge --cov-report=term-missing --cov-fail-under=70 -m "not integration"
+      - run: uv build
       - name: package hygiene — no local logs / review scratch leak into sdist or wheel
         run: |
           python3 - <<'PY'
