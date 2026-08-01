@@ -58,9 +58,7 @@ herdr-commander run        # run your first task: a thumbnail function + unit te
 
 See [`docs/light-user-quickstart.md`](docs/light-user-quickstart.md) for details.
 
-<!-- TODO: uncomment on public -->
-<!-- [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/aiken884/herdr-bridge/badge)](https://scorecard.dev/viewer/?uri=github.com/aiken884/herdr-bridge) -->
-<!-- -->
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/aiken884/herdr-bridge/badge)](https://scorecard.dev/viewer/?uri=github.com/aiken884/herdr-bridge)
 
 ## Why occasional users need it even more
 
