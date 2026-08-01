@@ -37,6 +37,9 @@ from herdr_bridge.orchestration._state_paths import (
 from herdr_bridge.orchestration._state_paths import (
     slugify_project as _slugify_project,
 )
+from herdr_bridge.orchestration._state_paths import (
+    standard_project_state_dir as _standard_project_state_dir,
+)
 
 logger = logging.getLogger("herdr_bridge.orchestration.memory")
 
@@ -83,8 +86,10 @@ _REMAGRAPH_MODE = _read_deprecated_or("HERDR_MEMORY_MODE", "auto").lower()
 # the CLI fallback is only for non-herdr contexts.
 try:
     from remagraph.db import connect as _rg_connect
+    from remagraph.db import declare_project_edge as _rg_declare_project_edge
     from remagraph.models import SearchRequest as _RgSearchRequest
     from remagraph.models import StoreRequest as _RgStoreRequest
+    from remagraph.search import sanitize_fts5_query as _rg_sanitize_fts5_query
     from remagraph.search import search_memories as _rg_search_memories
     from remagraph.store import process_store as _rg_process_store
     _DIRECT_IMPORT = True
@@ -306,6 +311,262 @@ def recall_memories(
         return data.get("memories", []) or []
     except Exception:  # noqa: BLE001  # same best-effort recall contract as the direct-import branch above (CLI failure, timeout, or malformed JSON all degrade to "no prior memories found").
         return []
+
+
+def _search_isolated_namespace(
+    query: str,
+    *,
+    top_k: int,
+    kind: str | None,
+    status: str | None,
+    tags: list[str] | None,
+    project_id: str,
+    agent_id: str | None,
+    task_id: str | None,
+    all_projects: bool,
+    cross_project_label: str | None,
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    """Search herdr-bridge's own `hb-live-` self-protected store (see
+    `_project_state_dir()`'s docstring) -- this is the *complete* result set
+    for anything herdr-bridge itself wrote (store_memory/record_fleet_member/
+    etc. only ever write here), but does NOT see messages an external tower
+    wrote via the standard convention -- see `_search_standard_namespace()`.
+    """
+    _enforce_remagraph_safety_valve(project_id)
+
+    if _DIRECT_IMPORT:
+        try:
+            conn = _rg_connect()
+            req = _RgSearchRequest(
+                query=query,
+                top_k=top_k,
+                kind=kind,
+                status=status,
+                tags=tags,
+                project_id=None if all_projects else project_id,
+                agent_id=agent_id,
+                task_id=task_id,
+                cross_project_label=cross_project_label,
+            )
+            resp = _rg_search_memories(conn, req)
+            try:
+                conn.close()
+            except Exception:  # best-effort cleanup of an external (remagraph-owned) connection object; failing to close must not fail the search itself.
+                logger.debug("failed to close remagraph connection after search", exc_info=True)
+            return list(getattr(resp, "results", None) or resp.get("results", []))
+        except Exception:  # noqa: BLE001  # search is a best-effort read: any backend/connection failure degrades to "no results found" rather than surfacing to the caller.
+            return []
+
+    # CLI fallback.
+    try:
+        cmd = ["remagraph", "search", "--query", query, "--top-k", str(top_k)]
+        if kind:
+            cmd += ["--kind", kind]
+        if status:
+            cmd += ["--status", status]
+        if tags:
+            cmd += ["--tags", json.dumps(tags)]
+        if all_projects:
+            cmd += ["--all-projects"]
+        else:
+            cmd += ["--project", project_id]
+        if agent_id:
+            cmd += ["--agent-id", agent_id]
+        if task_id:
+            cmd += ["--task-id", task_id]
+        if cross_project_label:
+            cmd += ["--cross-project-label", cross_project_label]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, env={**os.environ}, check=False)
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout or "{}")
+        return data.get("results", []) or []
+    except Exception:  # noqa: BLE001  # same best-effort search contract as the direct-import branch above (CLI failure, timeout, or malformed JSON all degrade to "no results found").
+        return []
+
+
+def _search_standard_namespace(
+    query: str,
+    *,
+    top_k: int,
+    kind: str | None,
+    status: str | None,
+    tags: list[str] | None,
+    project_id: str,
+    agent_id: str | None,
+    task_id: str | None,
+    all_projects: bool,
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    """Best-effort read of the plain `remagraph-<project_id>` path (see
+    `standard_project_state_dir()`) -- where an external tower following
+    RemaGraph's own documented convention (with no knowledge of
+    herdr-bridge's `hb-live-` deviation) writes and reads. herdr-bridge never
+    writes here itself, so this is read-only, raw sqlite3 (no dependency on
+    the remagraph package's own connection/migration machinery -- the DB
+    already exists in whatever schema the external writer's remagraph
+    version created it with). Missing file / any read error degrades
+    silently to "no results from this namespace", exactly like the isolated
+    side's best-effort contract.
+    """
+    db_path = _standard_project_state_dir(project_id) / "remagraph.db"
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        where: list[str] = []
+        params: list[Any] = []
+        if not all_projects:
+            where.append("m.project_id = ?")
+            params.append(project_id)
+        if kind:
+            where.append("m.kind = ?")
+            params.append(kind)
+        if status:
+            where.append("m.status = ?")
+            params.append(status)
+        if agent_id:
+            where.append("m.agent_id = ?")
+            params.append(agent_id)
+        if task_id:
+            where.append("m.task_id = ?")
+            params.append(task_id)
+
+        # Same FTS5 trigram matching RemaGraph's own search_memories() uses --
+        # a plain LIKE substring match would miss any multi-word query
+        # (matching individual tokens, not the literal joined phrase).
+        sanitized = _rg_sanitize_fts5_query(query) if query.strip() else ""
+        has_fts5 = bool(sanitized) and len(sanitized.replace(" ", "")) >= 3
+        if has_fts5:
+            sql = (
+                "SELECT m.* FROM memories m "
+                "JOIN memories_fts f ON m.rowid = f.rowid "
+                "WHERE memories_fts MATCH ?"
+            )
+            params = [sanitized, *params]
+        else:
+            sql = "SELECT m.* FROM memories m"
+        if where:
+            sql += (" AND " if has_fts5 else " WHERE ") + " AND ".join(where)
+        sql += " ORDER BY m.timestamp DESC LIMIT ?"
+        params.append(top_k)
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        conn.close()
+        if tags:
+            def _row_has_any_tag(row: dict[str, Any]) -> bool:
+                try:
+                    row_tags = json.loads(row.get("tags") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    row_tags = []
+                return any(t in row_tags for t in tags)
+            rows = [r for r in rows if _row_has_any_tag(r)]
+        return rows
+    except Exception:  # noqa: BLE001  # read-only best-effort secondary source (see docstring); a missing/locked/malformed/schema-incompatible DB degrades to "no results from this namespace", not a search failure.
+        return []
+
+
+def search_memories(
+    query: str = "",
+    *,
+    top_k: int = 10,
+    kind: str | None = None,
+    status: str | None = None,
+    tags: list[str] | None = None,
+    project_id: str,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    all_projects: bool = False,
+    cross_project_label: str | None = None,
+    timeout_sec: int = 8,
+) -> list[dict[str, Any]]:
+    """General-purpose Herdr Bridge Memory search (the `search` counterpart to
+    store_memory()/recall_memories()): full-text + filtered lookup, so callers
+    don't need to know the underlying `remagraph search` CLI directly.
+
+    project_id still determines which memory store (state_dir) this connects
+    to -- all_projects only controls whether results are additionally
+    filtered down to that project_id within that store, or returned
+    unfiltered (matching the `remagraph search --all-projects` semantics:
+    "all projects sharing this store", not a global fan-out across every
+    store on disk -- use cross_project_label for that).
+
+    2026-08-01 (PPLX-consulted architecture decision, see
+    docs/decisions/hb-live-namespace-search-20260801.md): reads check BOTH
+    herdr-bridge's own `hb-live-` self-protected store AND the plain
+    `remagraph-<project_id>` path an external tower would use by default,
+    merge the results (deduped by id, each tagged with which namespace it
+    came from via `_namespace`), and return the newest `top_k` overall.
+    Writes (store_memory) deliberately do NOT change -- they stay isolated-
+    only, preserving the 2026-07-25 #66 self-protection against the rogue
+    external `remagraph serve` process. `cross_project_label` only applies to
+    the isolated side (it's a remagraph-native fan-out mechanism that
+    doesn't have a meaningful standard-namespace equivalent here).
+    """
+    if not is_remagraph_enabled():
+        return []
+
+    if not project_id or project_id in ("herdr", "default"):
+        raise HerdrMemoryError("project_id is a required field; the herdr-bridge context must not use 'default'.")
+
+    isolated = _search_isolated_namespace(
+        query, top_k=top_k, kind=kind, status=status, tags=tags, project_id=project_id,
+        agent_id=agent_id, task_id=task_id, all_projects=all_projects,
+        cross_project_label=cross_project_label, timeout_sec=timeout_sec,
+    )
+    for r in isolated:
+        r.setdefault("_namespace", "isolated")
+
+    standard = _search_standard_namespace(
+        query, top_k=top_k, kind=kind, status=status, tags=tags, project_id=project_id,
+        agent_id=agent_id, task_id=task_id, all_projects=all_projects, timeout_sec=timeout_sec,
+    )
+    for r in standard:
+        r.setdefault("_namespace", "standard")
+
+    # Dedup key must include the namespace: each namespace is a separate SQLite
+    # database with its own id sequence (RemaGraph's mem-YYYYMMDD-NNN scheme), so
+    # an isolated record and a standard record can share the exact same literal
+    # `id` string while being two entirely different records -- deduping on bare
+    # `id` alone would silently drop one of them as a "duplicate".
+    seen_ids: set[tuple[str, str]] = set()
+    merged: list[dict[str, Any]] = []
+    for r in isolated + standard:
+        rid = r.get("id")
+        key = (r.get("_namespace", ""), rid) if rid is not None else None
+        if key is not None and key in seen_ids:
+            continue
+        if key is not None:
+            seen_ids.add(key)
+        merged.append(r)
+
+    merged.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
+    return merged[:top_k]
+
+
+def link_project(from_project: str, to_project: str, relation: str) -> None:
+    """Declare a (from_project, to_project, relation) edge for
+    search_memories()'s underlying `include_related`/`related_hops`
+    traversal (the `remagraph link` counterpart), so callers don't need to
+    know the underlying `remagraph` CLI directly.
+
+    Uses a global, machine-wide project registry DB (not the per-project
+    hb-live-/standard namespaces search_memories() reads) -- declaring a
+    relation doesn't touch either project's own memory store.
+    """
+    if not is_remagraph_enabled():
+        return
+
+    if _DIRECT_IMPORT:
+        _rg_declare_project_edge(from_project, to_project, relation)
+        return
+
+    # CLI fallback.
+    subprocess.run(
+        ["remagraph", "link", "--from", from_project, "--to", to_project, "--relation", relation],
+        capture_output=True, text=True, timeout=8, env={**os.environ}, check=False,
+    )
 
 
 def format_memory_summary(memories: list[dict[str, Any]], max_items: int = 5) -> str:

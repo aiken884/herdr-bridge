@@ -29,6 +29,7 @@ from herdr_bridge.orchestration.memory import (
     recall_memories,
     record_fleet_member,
     record_fleet_recycle,
+    search_memories,
     store_memory,
     uses_direct_import,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "recall_memories",
     "record_fleet_member",
     "record_fleet_recycle",
+    "search_memories",
     "store_memory",
     "uses_direct_import",
 ]

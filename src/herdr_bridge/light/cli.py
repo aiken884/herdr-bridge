@@ -1304,6 +1304,157 @@ def cmd_memory_note(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_memory_search(args: argparse.Namespace) -> int:
+    """Search Herdr Bridge Memory: the CLI-escape-hatch counterpart to
+    `memory note`, for looking up memories/task handoffs (e.g. a cross-project
+    request left for this project) without needing to know the underlying
+    `remagraph` CLI directly.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    tags: list[str] | None = None
+    if args.tags:
+        import json as _json
+        try:
+            tags = _json.loads(args.tags) if args.tags.strip().startswith("[") else [t.strip() for t in args.tags.split(",") if t.strip()]
+        except _json.JSONDecodeError:
+            tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+
+    try:
+        results = _rg.search_memories(
+            args.query or "",
+            top_k=args.top_k,
+            kind=args.kind,
+            status=args.status,
+            tags=tags,
+            project_id=project,
+            agent_id=args.agent_id,
+            task_id=args.task_id,
+            all_projects=args.all_projects,
+            cross_project_label=args.cross_project_label,
+        )
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    scope = f"project={project}" + (", all-projects" if args.all_projects else "")
+    if not results:
+        _say(f"No memories found ({scope}).")
+        return 0
+
+    _say(f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} ({scope}):")
+    for r in results:
+        kind = r.get("kind", "?")
+        task_id = r.get("task_id", "?")
+        agent_id = r.get("agent_id", "?")
+        ts = str(r.get("timestamp", ""))[:19]
+        summary = (r.get("summary") or r.get("handoff_note") or "")[:200]
+        print(f"  [{kind}] {task_id} (agent={agent_id}, {ts})")
+        if summary:
+            print(f"    {summary}")
+    return 0
+
+
+def cmd_memory_status(args: argparse.Namespace) -> int:
+    """List recent Herdr Bridge Memory activity for a project (the
+    `remagraph status` counterpart) -- a quick "what's happened lately"
+    view, as opposed to `memory search`'s keyword lookup. Thin wrapper
+    around search_memories() with an empty query (list mode).
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    try:
+        results = _rg.search_memories(
+            "",
+            top_k=args.top_k,
+            kind=args.kind,
+            project_id=project,
+            all_projects=args.all_projects,
+        )
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    scope = f"project={project}" + (", all-projects" if args.all_projects else "")
+    if not results:
+        _say(f"No recent memory activity ({scope}).")
+        return 0
+
+    _say(f"Recent activity ({scope}):")
+    for r in results:
+        kind = r.get("kind", "?")
+        task_id = r.get("task_id", "?")
+        agent_id = r.get("agent_id", "?")
+        ts = str(r.get("timestamp", ""))[:19]
+        namespace = r.get("_namespace", "?")
+        summary = (r.get("summary") or r.get("handoff_note") or "")[:160]
+        print(f"  [{kind}/{namespace}] {task_id} (agent={agent_id}, {ts})")
+        if summary:
+            print(f"    {summary}")
+    return 0
+
+
+def cmd_memory_maintain(args: argparse.Namespace) -> int:
+    """Apply Herdr Bridge Memory's retention policy: archive stale
+    delivery-state-tagged records past their SLA (the `remagraph maintain`
+    counterpart, scoped to herdr-bridge's own retention concept). Defaults
+    to a dry run -- pass --apply to actually archive.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    try:
+        result = _rg.apply_retention(project, dry_run=not args.apply)
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    mode = "dry run" if result.get("dry_run", True) else "applied"
+    _say(f"Retention ({mode}, project={project}): {result.get('archived', 0)} record(s) archived")
+    if getattr(args, "verbose", False):
+        print(f"  policy: {result.get('policy')}")
+    if result.get("dry_run", True) and result.get("archived", 0) > 0:
+        _say("Re-run with --apply to actually archive these.")
+    return 0
+
+
+def cmd_memory_link(args: argparse.Namespace) -> int:
+    """Declare a relation between two projects (the `remagraph link`
+    counterpart), so `memory search --include-related` can traverse it.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    try:
+        _rg.link_project(args.from_project, args.to_project, args.relation)
+    except ValueError as exc:
+        _err(str(exc))
+        return 1
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    _say(f"Linked {args.from_project} -> {args.to_project} ({args.relation})")
+    return 0
+
+
 def _verbose_parent() -> argparse.ArgumentParser:
     """A shared parent parser exposing -v/--verbose to each subcommand
     individually (`herdr-commander doctor -v`, `herdr-commander run -v`, ...).
@@ -1427,15 +1578,15 @@ def build_parser() -> argparse.ArgumentParser:
     spdoc.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spdoc.set_defaults(func=cmd_doctor)
 
-    # memory: Herdr Bridge Memory CLI escape hatch (currently just "note"; more
-    # may be added later, kept deliberately minimal rather than replicating the
-    # full underlying remagraph CLI)
+    # memory: Herdr Bridge Memory CLI escape hatch ("note" to write, "search"
+    # to read; kept deliberately minimal rather than replicating the full
+    # underlying remagraph CLI)
     # NOTE: parents=[_verbose_parent()] is deliberately NOT added here (unlike
     # every other subparser) -- "memory" nests a second subparsers level
-    # ("note", below), and adding -v/--verbose at both levels reproduces the
-    # exact same clobbering hazard _verbose_parent()'s docstring describes,
-    # one level deeper (verified: `memory -v note ...` would silently drop
-    # -v). Only the leaf "note" subparser gets it.
+    # ("note"/"search", below), and adding -v/--verbose at both levels
+    # reproduces the exact same clobbering hazard _verbose_parent()'s
+    # docstring describes, one level deeper (verified: `memory -v note ...`
+    # would silently drop -v). Only the leaf subparsers get it.
     spmem = sub.add_parser("memory", help="Herdr Bridge Memory operations")
     memsub = spmem.add_subparsers(dest="memory_action", required=True)
     spnote = memsub.add_parser("note", help="Log a memory note for a task/agent", parents=[_verbose_parent()])
@@ -1444,6 +1595,37 @@ def build_parser() -> argparse.ArgumentParser:
     spnote.add_argument("--agent-id", dest="agent_id", required=True, help="Agent id to associate this note with")
     spnote.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spnote.set_defaults(func=cmd_memory_note)
+
+    spsearch = memsub.add_parser("search", help="Search memories/task handoffs (e.g. a cross-project request left for this project)", parents=[_verbose_parent()])
+    spsearch.add_argument("query", nargs="?", default="", help="Full-text keyword query (optional; omit to just filter/list by the flags below)")
+    spsearch.add_argument("--top-k", dest="top_k", type=int, default=10, help="Max results to return (default 10)")
+    spsearch.add_argument("--kind", default=None, choices=["task_handoff", "status_update", "discovered_constraint", "fleet_member"], help="Filter by memory kind")
+    spsearch.add_argument("--status", default=None, choices=["active", "superseded", "invalidated"], help="Filter by status")
+    spsearch.add_argument("--tags", default=None, help="Filter by tags (comma-separated, or a JSON array)")
+    spsearch.add_argument("--agent-id", dest="agent_id", default=None, help="Filter by agent id")
+    spsearch.add_argument("--task-id", dest="task_id", default=None, help="Filter by task id")
+    spsearch.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsearch.add_argument("--all-projects", dest="all_projects", action="store_true", help="Don't filter to --project; search everything in this memory store (e.g. when a cross-project message's project_id doesn't match what you expected)")
+    spsearch.add_argument("--cross-project-label", dest="cross_project_label", default=None, help="Search across each known project's own separate memory store by a namespaced label (e.g. 'topic:how-to-contact-tower')")
+    spsearch.set_defaults(func=cmd_memory_search)
+
+    spmemstatus = memsub.add_parser("status", help="List recent memory activity for a project", parents=[_verbose_parent()])
+    spmemstatus.add_argument("--top-k", dest="top_k", type=int, default=10, help="Max entries to show (default 10)")
+    spmemstatus.add_argument("--kind", default=None, choices=["task_handoff", "status_update", "discovered_constraint", "fleet_member"], help="Filter by memory kind")
+    spmemstatus.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spmemstatus.add_argument("--all-projects", dest="all_projects", action="store_true", help="Don't filter to --project; show everything in this memory store")
+    spmemstatus.set_defaults(func=cmd_memory_status)
+
+    spmaintain = memsub.add_parser("maintain", help="Apply the retention policy (archive stale delivery-state records)", parents=[_verbose_parent()])
+    spmaintain.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spmaintain.add_argument("--apply", action="store_true", help="Actually archive (default is a dry run that only reports what would be archived)")
+    spmaintain.set_defaults(func=cmd_memory_maintain)
+
+    splink = memsub.add_parser("link", help="Declare a relation between two projects (for --include-related traversal in search)", parents=[_verbose_parent()])
+    splink.add_argument("--from", dest="from_project", required=True, help="Source project id")
+    splink.add_argument("--to", dest="to_project", required=True, help="Target project id")
+    splink.add_argument("--relation", required=True, choices=["depends_on", "sibling", "shares_upstream", "monorepo_member"], help="Relation type (treated as bidirectional during traversal)")
+    splink.set_defaults(func=cmd_memory_link)
 
     return p
 
