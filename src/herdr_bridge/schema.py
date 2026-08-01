@@ -41,6 +41,8 @@ def fetch_schema_via_cli(herdr_bin: str = "herdr") -> dict[str, Any]:
         [herdr_bin, "api", "schema", "--json"],
         capture_output=True, text=True, timeout=30, check=True,
     )
+    # cast() is a runtime no-op (it just returns its second argument unchanged), so a
+    # mutation of its first argument is an equivalent mutant mutmut can never kill.
     return cast(dict[str, Any], json.loads(out.stdout))
 
 

@@ -149,13 +149,19 @@ def test_backoff_caps_at_max(fake_herdr, monkeypatch):
 
     After B2-5, the backoff wait goes through Event.wait (so close() can wake
     it), so the spy target is now threading.Event.wait (a timeout > 0.01s is
-    the backoff value)."""
+    the backoff value). threading.Event.wait is patched process-wide, so the
+    spy filters to only this subscription's own _closed Event -- otherwise,
+    in a full-suite run, an unrelated background thread from another
+    still-running fixture can leak its own timeout value into `sleeps` and
+    produce a spurious "backoff exceeded cap" failure (observed intermittently
+    when run alongside the rest of the suite, never in isolation)."""
     import threading
     sleeps: list[float] = []
+    target_event: list[threading.Event] = []
     orig_wait = threading.Event.wait
 
     def spy_wait(self, timeout=None):
-        if timeout is not None and timeout > 0.01:
+        if target_event and self is target_event[0] and timeout is not None and timeout > 0.01:
             sleeps.append(timeout)
             timeout = min(timeout, 0.02)  # speed up the test: actually only wait 20ms
         return orig_wait(self, timeout)
@@ -165,6 +171,7 @@ def test_backoff_caps_at_max(fake_herdr, monkeypatch):
     sub = c.subscribe([{"type": "pane.created"}],
                       on_event=lambda e, d: None,
                       backoff_initial_sec=0.5, backoff_max_sec=1.0)
+    target_event.append(sub._closed)
     assert _wait_until(lambda: any(
         r["method"] == "events.subscribe" for r in fake_herdr.requests))
     for _ in range(8):
