@@ -77,8 +77,11 @@ def test_server_compat_rejects_older_protocol(fake_herdr):
     fake_herdr.set_handler(
         "ping", lambda p: {"type": "pong", "version": "0.6", "protocol": 15,
                            "capabilities": {}})
-    with pytest.raises(SchemaVersionError):
+    with pytest.raises(SchemaVersionError) as exc:
         check_server_compat(SocketClient(fake_herdr.socket_path))
+    # kills check_server_compat mutmut_10: the raised message -> None
+    assert "15" in str(exc.value)
+    assert "below minimum supported" in str(exc.value)
 
 
 def test_server_compat_warns_but_allows_newer_protocol(fake_herdr, caplog):
@@ -89,7 +92,15 @@ def test_server_compat_warns_but_allows_newer_protocol(fake_herdr, caplog):
     with caplog.at_level(logging.WARNING, logger="herdr_bridge.schema"):
         info = check_server_compat(SocketClient(fake_herdr.socket_path))
     assert info["protocol_compat"] == "untested"
-    assert any("untested" in r.message for r in caplog.records)
+    # exact match (not a loose substring check) so a wording change in either half of
+    # the message is caught (kills check_server_compat mutmut_18/20)
+    assert any(
+        r.getMessage() == (
+            "herdr server protocol 18 is newer than the last tested protocol 16; "
+            "continuing in untested-compat mode — update herdr-bridge if you hit issues"
+        )
+        for r in caplog.records
+    )
 
 
 ITEMS_SCHEMA = {
@@ -278,6 +289,7 @@ def test_fetch_schema_via_cli_parses_stdout_json(monkeypatch):
 
     def fake_run(argv, **kwargs):
         captured["argv"] = argv
+        captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(
             argv, returncode=0, stdout='{"protocol": 16, "schema_version": 1}', stderr=""
         )
@@ -287,6 +299,114 @@ def test_fetch_schema_via_cli_parses_stdout_json(monkeypatch):
 
     assert result == {"protocol": 16, "schema_version": 1}
     assert captured["argv"] == ["herdr", "api", "schema", "--json"]
+    # pins every subprocess.run kwarg exactly (kills fetch_schema_via_cli mutmut_5/6/
+    # 7/8/10/11/12/13/20/21/22/23: any dropped or altered capture_output/text/timeout/
+    # check kwarg changes this dict)
+    assert captured["kwargs"] == {
+        "capture_output": True, "text": True, "timeout": 30, "check": True,
+    }
+
+
+def test_fetch_schema_via_cli_default_binary_name(monkeypatch):
+    """The default herdr_bin is "herdr" (kills fetch_schema_via_cli mutmut_1/2:
+    "herdr" -> "XXherdrXX"/"HERDR")."""
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    fetch_schema_via_cli()
+
+    assert captured["argv"][0] == "herdr"
+
+
+def test_load_missing_oneof_key_yields_no_methods():
+    """A request schema without a "oneOf" key produces an empty method set
+    instead of crashing. (kills load mutmut_8/10: []->None default)"""
+    schema_no_oneof = {
+        "protocol": 16, "schema_version": 1,
+        "schemas": {"request": {}},
+    }
+    store = SchemaStore.load(schema_no_oneof)
+    assert store.methods == frozenset()
+
+
+def test_validate_request_variant_without_properties_key():
+    """A directly-constructed variant lacking a "properties" key entirely is
+    treated as having no params schema, not a crash. `SchemaStore.load()`
+    itself never produces such a variant (it requires "properties" to extract
+    the method name), so this constructs the store directly to exercise
+    `validate_request`'s own defensive fallback. (kills validate_request
+    mutmut_6/8: {}->None default)"""
+    store = SchemaStore(root={}, variants={"noop": {"required": ["method"]}})
+    store.validate_request("noop", {})
+
+
+def test_oneof_nested_variant_error_keeps_correct_path():
+    """A oneOf variant's own nested validation failure keeps the real path
+    prefix instead of a "None:" placeholder. (kills _validate_node mutmut_13:
+    path->None in the recursive oneOf-variant call)"""
+    store = SchemaStore.load(ITEMS_SCHEMA)
+    with pytest.raises(ValueError) as exc:
+        store.validate_request("events.subscribe", {"subscriptions": [
+            {"type": "pane.agent_status_changed"},  # missing required pane_id
+        ]})
+    assert "None:" not in str(exc.value)
+    assert "params.subscriptions[0]" in str(exc.value)
+
+
+THREE_VARIANT_SCHEMA = {
+    "protocol": 16, "schema_version": 1,
+    "schemas": {"request": {
+        "oneOf": [
+            {"properties": {"method": {"const": "triop"},
+                            "params": {"$ref": "#/schemas/request/$defs/V"}},
+             "required": ["method", "params"]},
+        ],
+        "$defs": {
+            "V": {"oneOf": [
+                {"type": "object", "properties": {"kind": {"const": "a"}}, "required": ["kind"]},
+                {"type": "object", "properties": {"kind": {"const": "b"}}, "required": ["kind"]},
+                {"type": "object", "properties": {"kind": {"const": "c"}}, "required": ["kind"]},
+            ]},
+        },
+    }},
+}
+
+
+def test_oneof_error_list_truncated_to_two_entries():
+    """When 3+ oneOf variants all fail, only the first two error details are
+    included in the summary message. (kills _validate_node mutmut_20:
+    errors[:2]->errors[:3])"""
+    store = SchemaStore.load(THREE_VARIANT_SCHEMA)
+    with pytest.raises(ValueError) as exc:
+        store.validate_request("triop", {"kind": "z"})
+    assert str(exc.value).count("!= const") == 2
+
+
+def test_items_schema_ignored_when_value_is_not_a_list():
+    """A schema with a stray "items" key doesn't try to iterate a non-list
+    value. (kills _validate_node mutmut_74: `isinstance(value, list) and
+    "items" in schema` -> `or`)"""
+    schema_with_stray_items = {
+        "protocol": 16, "schema_version": 1,
+        "schemas": {"request": {
+            "oneOf": [
+                {"properties": {"method": {"const": "weird"},
+                                "params": {"type": "object",
+                                           "properties": {"foo": {"type": "string"}},
+                                           "required": ["foo"],
+                                           "items": {"type": "integer"}}},
+                 "required": ["method", "params"]},
+            ],
+        }},
+    }
+    store = SchemaStore.load(schema_with_stray_items)
+    # params is a dict, not a list; the stray "items" key must be ignored, not
+    # trigger an attempt to enumerate() the dict
+    store.validate_request("weird", {"foo": "bar"})
 
 
 def test_schema_load_skip_variant_without_const():
