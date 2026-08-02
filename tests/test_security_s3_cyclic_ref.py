@@ -45,15 +45,22 @@ SELF_REF_SCHEMA = {
 }
 
 
+@pytest.mark.timeout(5)
 def test_cyclic_ref_a_b_a_raises_schema_error():
-    """A cyclic A->B->A $ref raises SchemaError, doesn't hang."""
+    """A cyclic A->B->A $ref raises SchemaError, doesn't hang. A short,
+    explicit per-test timeout (rather than relying on the outer test-runner's
+    own timeout) turns a broken cycle guard into a fast, clearly-attributed
+    failure instead of a multi-minute hang."""
     store = SchemaStore.load(CYCLIC_SCHEMA)
     with pytest.raises(SchemaError, match="cyclic"):
         store.validate_request("test.op", {"x": 1})
 
 
+@pytest.mark.timeout(5)
 def test_self_ref_raises_schema_error():
-    """A cyclic Self->Self $ref raises SchemaError."""
+    """A cyclic Self->Self $ref raises SchemaError. (kills _resolve
+    mutmut_10: visited.add(ref)->visited.add(None), which breaks cycle
+    detection entirely and hangs forever without the timeout marker above)"""
     store = SchemaStore.load(SELF_REF_SCHEMA)
     with pytest.raises(SchemaError, match="cyclic"):
         store.validate_request("self.ref", {"x": 1})

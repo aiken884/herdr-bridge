@@ -9,6 +9,7 @@ dist/
 .ruff_cache/
 .superpowers/
 .claude/
+.claude-scratch/
 .codegraph/
 .omo/
 .vendor/

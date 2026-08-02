@@ -53,3 +53,42 @@ def project_state_dir(project_id: str) -> Path:
     """
     safe = slugify_project(project_id)
     return Path.home() / ".local" / "state" / f"remagraph-hb-live-{safe}"
+
+
+def signal_state_dir(project_id: str) -> Path:
+    """Herdr Bridge Signal's own state dir (socket, lock file, pin file, ACK-state
+    store) for this project — `~/.local/state/herdr-bridge/signal/<project>/`.
+
+    Deliberately a separate top-level path from RemaGraph's `remagraph-*`
+    directories (design doc §2.4 defect 3 / §3.3a): Signal's socket/lock files
+    aren't RemaGraph data and shouldn't share a directory an external
+    `remagraph serve` process might treat as its own (see
+    `project_state_dir()`'s #66 self-protection docstring) — Signal has no such
+    external-process collision risk of its own, but reusing RemaGraph's
+    directory would create one where none previously existed.
+    """
+    safe = slugify_project(project_id)
+    return Path.home() / ".local" / "state" / "herdr-bridge" / "signal" / safe
+
+
+def standard_project_state_dir(project_id: str) -> Path:
+    """The plain, un-deviated `remagraph-<project_id>` path -- what any external
+    caller (another tower, the bare `remagraph` CLI, or anyone following
+    RemaGraph's own documented convention) uses by default, with no knowledge
+    of herdr-bridge's `hb-live-` self-protection deviation above.
+
+    2026-08-01 finding: `store_memory`/`recall_memories`/etc. writing and
+    reading exclusively through `project_state_dir()`'s `hb-live-` path means
+    a message written by an external tower via the standard convention (e.g.
+    RemaGraph's own command tower doing `remagraph store --project
+    herdr-bridge`) is invisible to herdr-bridge's own memory API -- it's a
+    different database file entirely. Read paths that need to see
+    cross-tower traffic (search, status/list) should check both this path
+    and `project_state_dir()`'s, merge, and tag each result by source so the
+    caller can tell them apart. Do NOT use this for writes: the whole point
+    of `hb-live-` is that herdr-bridge's own writes must stay off the
+    standard path so the external rogue `remagraph serve` process (see
+    `project_state_dir()`'s docstring) doesn't recognize and wipe them.
+    """
+    safe = slugify_project(project_id)
+    return Path.home() / ".local" / "state" / f"remagraph-{safe}"

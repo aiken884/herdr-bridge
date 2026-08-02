@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Live ACP dispatch dogfood test (one-off, exploratory — not a long-term-maintained script).
+"""Live ACP dispatch manual test (one-off, exploratory — not a long-term-maintained script).
 
-Must be run with `uv run python scripts/acp-dogfood-test.py` from the herdr-bridge
+Must be run with `uv run python scripts/acp-manual-test.py` from the herdr-bridge
 repo root — `connect()` uses `Path.cwd()` to find `.vendor/opencode-patched/`.
 
 Runs five scenarios in order, each printing a clear PASS/FAIL plus what was actually observed.
@@ -18,7 +18,7 @@ from herdr_bridge.acp.actions import connect
 from herdr_bridge.acp.errors import AcpSessionError
 from herdr_bridge.acp.models import AcpPolicy
 
-SANDBOX = Path("/tmp/acp-dogfood-sandbox")
+SANDBOX = Path("/tmp/acp-manual-test-sandbox")
 PRIMARY_WORKTREE = Path("/Users/aikenlin/Projects/herdr-bridge")
 
 
@@ -26,20 +26,20 @@ def scenario_1_basic_roundtrip(acp):
     print("\n=== Scenario 1: basic session/prompt round trip ===")
     target = SANDBOX / "hello.txt"
     target.unlink(missing_ok=True)
-    acp.ensure_session("dogfood", "opencode", str(SANDBOX), "s1", policy=AcpPolicy(mode="approve-all"))
-    result = acp.prompt("dogfood", "s1", "Create a file named hello.txt in the current directory with the content hi. Don't ask me, just do it.")
+    acp.ensure_session("manual-test", "opencode", str(SANDBOX), "s1", policy=AcpPolicy(mode="approve-all"))
+    result = acp.prompt("manual-test", "s1", "Create a file named hello.txt in the current directory with the content hi. Don't ask me, just do it.")
     print(f"reason={result.reason} stop_reason={result.stop_reason}")
     print(f"file exists: {target.exists()}, content: {target.read_text() if target.exists() else None!r}")
     ok = result.reason == "stop" and target.exists()
     print("PASS" if ok else "FAIL")
-    acp.close_session("dogfood", "s1")
+    acp.close_session("manual-test", "s1")
     return ok
 
 
 def scenario_2_primary_worktree_rejected(acp):
     print("\n=== Scenario 2: pointing at the primary worktree should be rejected ===")
     try:
-        acp.ensure_session("dogfood", "opencode", str(PRIMARY_WORKTREE), "s2")
+        acp.ensure_session("manual-test", "opencode", str(PRIMARY_WORKTREE), "s2")
         print("FAIL: no exception was raised, workdir isolation is not in effect")
         return False
     except AcpSessionError as exc:
@@ -50,16 +50,16 @@ def scenario_2_primary_worktree_rejected(acp):
 
 def scenario_3_cancel_reason(acp):
     print("\n=== Scenario 3: real in-generation cancel ===")
-    acp.ensure_session("dogfood", "opencode", str(SANDBOX), "s3", policy=AcpPolicy(mode="approve-all"))
-    handle = acp.start_prompt("dogfood", "s3", "Write a long article of at least 2000 words about the weather, as detailed as possible")
+    acp.ensure_session("manual-test", "opencode", str(SANDBOX), "s3", policy=AcpPolicy(mode="approve-all"))
+    handle = acp.start_prompt("manual-test", "s3", "Write a long article of at least 2000 words about the weather, as detailed as possible")
     # Wait until content is actually being generated before canceling (avoids a false pre-generation boundary)
     time.sleep(3)
-    acp.cancel("dogfood", handle)
-    result = acp.wait_done("dogfood", handle, timeout_sec=15)
+    acp.cancel("manual-test", handle)
+    result = acp.wait_done("manual-test", handle, timeout_sec=15)
     print(f"reason={result.reason} stop_reason={result.stop_reason}")
     ok = result.reason == "canceled"
     print("PASS" if ok else "FAIL")
-    acp.close_session("dogfood", "s3")
+    acp.close_session("manual-test", "s3")
     return ok
 
 
@@ -67,24 +67,24 @@ def scenario_4_deny_all(acp):
     print("\n=== Scenario 4: deny-all permission actually blocks the action ===")
     target = SANDBOX / "should-not-exist.txt"
     target.unlink(missing_ok=True)
-    acp.ensure_session("dogfood", "opencode", str(SANDBOX), "s4", policy=AcpPolicy(mode="deny-all"))
-    result = acp.prompt("dogfood", "s4", "Create a file named should-not-exist.txt with any content")
+    acp.ensure_session("manual-test", "opencode", str(SANDBOX), "s4", policy=AcpPolicy(mode="deny-all"))
+    result = acp.prompt("manual-test", "s4", "Create a file named should-not-exist.txt with any content")
     print(f"reason={result.reason} file exists: {target.exists()}")
     ok = not target.exists()
     print("PASS" if ok else "FAIL")
-    acp.close_session("dogfood", "s4")
+    acp.close_session("manual-test", "s4")
     return ok
 
 
 def scenario_5_subagent_delegation(acp):
     print("\n=== Scenario 5: G1 regression — subagent delegation should not hang ===")
     acp.ensure_session(
-        "dogfood", "opencode", str(SANDBOX), "s5",
+        "manual-test", "opencode", str(SANDBOX), "s5",
         policy=AcpPolicy(mode="deny-all"),
     )
     start = time.monotonic()
     result = acp.prompt(
-        "dogfood", "s5",
+        "manual-test", "s5",
         "Use the task tool to delegate a subagent to create a file named delegated.txt with the content done",
         timeout_sec=45,
     )
@@ -92,7 +92,7 @@ def scenario_5_subagent_delegation(acp):
     print(f"reason={result.reason} elapsed={elapsed:.1f}s")
     ok = result.reason != "timeout" and elapsed < 40
     print("PASS" if ok else "FAIL — looks like we hit G1 or timed out")
-    acp.close_session("dogfood", "s5")
+    acp.close_session("manual-test", "s5")
     return ok
 
 

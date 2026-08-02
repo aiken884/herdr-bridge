@@ -123,7 +123,7 @@ for (const [key, entry] of Object.entries(yield* mcp.tools())) {
 1. **opencode 系 tier（`oc-dspro`/`oc-dsflash`/`oc-kimi` 及未來新增的 opencode-backed tier）一律視為 untrusted FS actor。** `herdr_bridge.acp` 不得在 API 語意、文件或 audit 記錄中暗示 acpx 的 permission policy（`--approve-all`/`--approve-reads`/`--deny-all`/`--permission-policy`）對 opencode tier 有實際強制力——這些 flag 對 opencode tier 目前確認為空轉。
 2. **workdir/git worktree 隔離，從 M1 起對 opencode 系 tier 為強制預設，不是 M2 opt-in、也不是「達到某個觸發條件才升 opt-out」——觸發條件即本次 M0 實證本身。** `ensure_session(actor_id, agent, workdir, ...)` 對 opencode 系 agent 要求 `workdir` 為顯式、非共用、非主要工作樹的路徑；`AcpxAdapter` 對 opencode 系 agent 的 session 建立，若 `workdir` 指向 repo 主要工作樹或與其他既有 session 共用，應拒絕/告警（具體實作機制留給 M1）。
 3. `claude` tier 不受此限制——ACP 權限協商對 claude adapter 確認有效，可依 ADR 0002 §4.6 既定的 S0→S1→S2 路徑正常演進。
-4. `AcpPolicy` 模型（設計文件 §4.2）對 opencode tier 的欄位仍保留（供未來 opencode upstream 修正後啟用、或未來透過 AcpTransport 接縫換官方 SDK 時重新評估），但 audit 記錄需明確標記 `policy_enforced: false`（opencode 系）vs `policy_enforced: true`（claude 系），避免治理層誤判「已設 policy = 已受控」。**`policy_enforced` 目前僅為 audit 記錄欄位，M1 階段沒有 runtime enforcement layer 讀取它做裁決——這是刻意的單點依賴（見下方「已知邊界」第 3 點），M2 若要加 runtime enforcement 需另行設計消費者。**
+4. `AcpPolicy` 模型（設計文件 §4.2）對 opencode tier 的欄位仍保留（供未來 opencode upstream 修正後啟用、或未來透過 AcpTransport 接縫換官方 SDK 時重新評估），但 audit 記錄需明確標記 `policy_enforced: false`（opencode 系）vs `policy_enforced: true`（claude 系），避免上層誤判「已設 policy = 已受控」。**`policy_enforced` 目前僅為 audit 記錄欄位，M1 階段沒有 runtime enforcement layer 讀取它做裁決——這是刻意的單點依賴（見下方「已知邊界」第 3 點），M2 若要加 runtime enforcement 需另行設計消費者。**
 
 此決策同時解決 ADR 0002 標頭「共識附帶記錄」中懸而未決的一項：「M2 驗收項需補 ADR：worktree 隔離從 opt-in 升 opt-out 的觸發條件」——觸發條件確認成立，時點提前至 M1（非 M2）。
 
@@ -134,7 +134,7 @@ for (const [key, entry] of Object.entries(yield* mcp.tools())) {
    - 路徑比對一律先 `os.path.realpath()`／`Path.resolve()`，禁止純字串前綴比對（防 symlink/hardlink 繞過）。
    - 用 `git worktree list --porcelain` 取得目前已知 worktree 路徑集合，`workdir` 若與 repo 主要工作樹路徑相同、或與任何既有 session 已佔用的 workdir 路徑相同（resolve 後比對），拒絕並回傳明確錯誤，記入 audit。
    - 檢查時機：至少覆蓋 `ensure_session()` 呼叫當下；**session 建立後 opencode 透過工具呼叫改變自身 cwd 或建立新檔案於 workdir 之外，M1 不做執行期攔截**（這是第 1 點「workdir 層級非 process 層級」邊界的直接後果，非遺漏），此限制需同步寫入 `herdr_bridge.acp` 的 api.md。
-3. **`policy_enforced` 欄位目前只進 audit，沒有 runtime enforcement layer 消費它做裁決。** 即：M1 的實際隔離有效性完全依賴 `ensure_session()` 那一個檢查點；若治理層繞過 `ensure_session()` 直接建構 session（理論上不應該，但沒有程式層面的強制），這個單點依賴沒有第二道防線。此風險明確記錄，不視為 M1 阻斷項，但 M1 的 api.md／BOUNDARIES 需誠實揭露此限制，避免未來被當作「已有 runtime enforcement」誤用。
+3. **`policy_enforced` 欄位目前只進 audit，沒有 runtime enforcement layer 消費它做裁決。** 即：M1 的實際隔離有效性完全依賴 `ensure_session()` 那一個檢查點；若呼叫端繞過 `ensure_session()` 直接建構 session（理論上不應該，但沒有程式層面的強制），這個單點依賴沒有第二道防線。此風險明確記錄，不視為 M1 阻斷項，但 M1 的 api.md／BOUNDARIES 需誠實揭露此限制，避免未來被當作「已有 runtime enforcement」誤用。
 
 ## Consequences
 

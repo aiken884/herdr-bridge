@@ -287,7 +287,16 @@ def test_real_downstream_acp_protocol():
     script = str(Path(__file__).resolve().parents[1] / "examples" / "acp-echo-agent.py")
     async def _run():
         client = SimpleRouterClient()
-        async with spawn_agent_process(client, "uv", "run", "python", script) as (conn, _proc):
+        # --no-sources: this repo's pyproject.toml has a [tool.uv.sources] override
+        # pinning remagraph to a local `../RemaGraph` editable checkout for day-to-day
+        # development (see the comment there). That path only exists on the
+        # maintainer's own machine -- on CI (or any other checkout), this nested `uv
+        # run` subprocess would otherwise fail during dependency resolution before the
+        # agent script even starts, which the ACP SDK surfaces as a generic
+        # "ConnectionError: Connection closed" rather than the real underlying error.
+        async with spawn_agent_process(
+            client, "uv", "run", "--no-sources", "python", script
+        ) as (conn, _proc):
             await conn.initialize(protocol_version=PROTOCOL_VERSION)
             sess = await conn.new_session(cwd=str(Path.cwd()), mcp_servers=[])
             prompt_result = await conn.prompt(
@@ -529,6 +538,7 @@ def test_acprouter_can_skip_fleet_listener_side_effect(capsys):
     )
 
 
+@pytest.mark.integration
 def test_fleet_event_listener_stays_connected_with_multiple_panes(capsys):
     """Regression test: herdr's events.subscribe has connection-wide subscription-set
     semantics, so calling it multiple times on the same connection (e.g. subscribing
