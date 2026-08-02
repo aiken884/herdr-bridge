@@ -638,7 +638,10 @@ class TestDefaultAgentResolverClaude:
         path = resolve("claude")
         assert path == fake_claude
 
-    def test_resolves_claude_via_which(self, tmp_path: Path):
+    def test_resolves_claude_via_which(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BIN", raising=False)
+        import shutil
+        monkeypatch.setattr(shutil, "which", lambda _name: "/fake/bin/claude")
         vendor_dir = tmp_path / "vendor"
         vendor_dir.mkdir()
         resolve = _default_agent_resolver(vendor_dir)

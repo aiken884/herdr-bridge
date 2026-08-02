@@ -65,3 +65,17 @@ class DeliveryStateWriteFailed(HerdrBridgeError):
     and distinguishes it from a plain call-order mistake in _validate_transition(),
     so debugging doesn't get misdirected toward "the caller's logic is wrong".
     """
+
+
+class SignalEnvelopeError(HerdrBridgeError):
+    """A Signal wake envelope failed verification (bad HMAC, expired timestamp,
+    replayed nonce, or malformed fields). The daemon drops the packet silently
+    (no ACK) on this error — see docs/herdr-bridge-signal-design.md §3.3a.
+    """
+
+
+class SignalStateWriteFailed(HerdrBridgeError):
+    """A Signal ACK-state write (mark_injected/mark_seen/mark_accepted_for_work/
+    mark_completed) failed its self-verification read-back — mirrors
+    DeliveryStateWriteFailed's rationale for the Signal state machine.
+    """

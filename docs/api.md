@@ -389,7 +389,7 @@ The four hardware-in-the-loop semantics (monotonic, stable, since-filtering, ses
 
 # API 參考
 
-本文件是 herdr-bridge 公開介面的權威版本——函式簽名、參數、例外、audit 記錄欄位，以及未來可能的政策/治理層將依賴的預留欄位語意。白話總覽、安裝與 Quickstart 請見根目錄 [`README.md`](../README.md)。
+本文件是 herdr-bridge 公開介面的權威版本——函式簽名、參數、例外、audit 記錄欄位，以及未來可能建立在這個套件之上的政策層將依賴的預留欄位語意。白話總覽、安裝與 Quickstart 請見根目錄 [`README.md`](../README.md)。
 
 全部公開符號皆可從套件頂層匯入：`from herdr_bridge import connect, AgentInfo, AgentOutput, SendResult, WaitResult, ...`（完整清單見 `herdr_bridge.__all__`）。
 

@@ -138,7 +138,7 @@ herdr-bridge is the **foundation**: the right way to extend it is to **build you
 
 - `herdr_bridge.acp.adapter` 的個別函式（`build_opencode_permission_config`／`write_session_config`／`build_acpx_argv_and_env`／`build_acpx_policy_flags`／`resolve_patched_opencode_binary`／`detect_target_triple`）——`AcpActions`/`AcpxTransport` 的組裝積木，不是給消費者直接呼叫的介面。
 - `herdr_bridge.acp.transport.AcpxTransport`／`AcpTransport` Protocol／`PromptHandle`——SDK 演進接縫（D-10），未來可能整個替換為官方 ACP SDK 直連的實作，消費者只透過 `AcpActions` 間接使用。
-- `herdr_bridge.acp.binding` 的 ledger 函式——治理層的派工對帳工具，不是這個模組自己會呼叫的路徑（policy-neutral，故意留給上層決定何時用）。
+- `herdr_bridge.acp.binding` 的 ledger 函式——上層派工對帳用的工具，不是這個模組自己會呼叫的路徑（policy-neutral，故意留給上層決定何時用）。
 - `herdr_bridge.acp.events` 的 NDJSON 解析細節。
 
 ## 擴充方式

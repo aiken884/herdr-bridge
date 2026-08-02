@@ -1,0 +1,12 @@
+# herdr-bridge gitleaks 設定
+# extend 預設規則，專案無測試用 fake token 需 allowlist。
+# 專案級調整如需新增規則或排除路徑，加在此檔即可。
+
+[extend]
+useDefault = true
+
+# 無測試用假憑證需排除；如需 allowlist，加在此處：
+# [allowlist]
+#   paths = [
+#     '''tests/fixtures/.*''',
+#   ]

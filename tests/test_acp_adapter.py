@@ -423,6 +423,8 @@ class TestResolveClaudeBinary:
 
     def test_uses_which_when_env_var_not_set(self, monkeypatch):
         monkeypatch.delenv("CLAUDE_BIN", raising=False)
+        import shutil
+        monkeypatch.setattr(shutil, "which", lambda _name: "/fake/bin/claude")
         path = resolve_claude_binary()
         assert path is not None
 

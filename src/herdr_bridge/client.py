@@ -169,6 +169,18 @@ class SocketClient:
         Valid JSON that isn't a dict (int/str/null...) is treated as a protocol
         violation -> HerdrConnectionError, so a TypeError doesn't escape and mask
         the real error (re-review MINOR-3).
+
+        Herdr 0.7.5 added a machine-readable `protocol_mismatch` error code (CLI
+        requests now surface it when client/server protocols differ). It is
+        deliberately NOT special-cased into its own exception class here: it
+        falls through to the generic `HerdrApiError` branch below like any other
+        unrecognized code, which already preserves `code`/`message` verbatim (see
+        test_generic_api_error in tests/test_client_request.py for the same
+        pattern with an unrelated code). A dedicated subclass would only be
+        warranted if this path lost information or misled callers — it doesn't,
+        and `subscribe()`'s `except HerdrApiError` already treats it as terminal
+        (no retry), which is the correct behavior since retrying can never
+        resolve a protocol mismatch.
         """
         if not isinstance(envelope, dict):
             raise HerdrConnectionError(
