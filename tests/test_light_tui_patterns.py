@@ -4,8 +4,8 @@
 
 """#65: single-source-of-truth tests for the five TUIs' prompt pattern table.
 
-The production path (`herdr_bridge.light.cli`) and the dogfooding harness
-(`screen_oracle.py`) used to each maintain their own copy of the pattern
+The production path (`herdr_bridge.light.cli`) and a separate real-screen
+verification harness used to each maintain their own copy of the pattern
 table, and the resulting capability mismatch was a structural problem
 (codex/agy's markers only existed in the harness's copy, not the production
 path, causing notify-pane to misjudge these two TUIs). This makes sure both

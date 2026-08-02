@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Socket resolution safety for connect() (F-2, dogfooding P0).
+"""Socket resolution safety for connect() (F-2, real-usage P0).
 
 Old behavior: when socket_path wasn't passed explicitly, it would silently
 fall back to the env var HERDR_SOCKET_PATH. In automation contexts (where the

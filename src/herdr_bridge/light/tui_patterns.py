@@ -8,13 +8,12 @@ Codex / OpenCode / Antigravity(agy)) — the single source of truth.
 Blood-lesson from #65: `herdr_bridge.light.cli`'s notify-pane (the production path)
 used to hard-code the prompt marker as a single `❯` (Claude Code only), which doesn't
 apply at all to other TUIs like codex (›) or agy (>) — causing messages that were
-still stuck in the input box to be misjudged as "submitted". `tests/dogfooding/harness/
-screen_oracle.py` separately maintained its own `PROMPT_PATTERNS`, already verified
-against real screens for all five TUIs, but the fact that the production path and the
-test harness had unequal detection capability was itself a structural problem — this
-module hoists the pattern table itself up under `src/`, so both sides (`cli.py`'s
-production path and `screen_oracle.py`'s harness oracle) import the same object from
-here instead of each maintaining their own copy.
+still stuck in the input box to be misjudged as "submitted". A separate real-screen
+verification harness maintained its own `PROMPT_PATTERNS`, already verified against
+real screens for all five TUIs, but the fact that the production path and the
+verification harness had unequal detection capability was itself a structural
+problem — this module hoists the pattern table itself up under `src/`, so both sides
+import the same object from here instead of each maintaining their own copy.
 
 Deliberately placed under `src/herdr_bridge/light/` (not `tests/`): `src/` must not
 depend on `tests/`, but `tests/` depending on `src/` is the normal direction.
