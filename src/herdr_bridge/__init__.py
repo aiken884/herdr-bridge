@@ -66,7 +66,7 @@ except HerdrMemoryError as _exc:
 
 logger = logging.getLogger("herdr_bridge")
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "AcpRouter",

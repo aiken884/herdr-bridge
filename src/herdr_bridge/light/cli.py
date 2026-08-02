@@ -1453,6 +1453,64 @@ def cmd_signal_status(args: argparse.Namespace) -> int:
     return 0 if not problems else 1
 
 
+_WATCHDOG_DEFAULT_PATH_ENV = "/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+def cmd_signal_install_watchdog(args: argparse.Namespace) -> int:
+    """Install (or reinstall) this project's Signal healthcheck watchdog as a
+    launchd service (macOS). A herdr-bridge-owned feature -- no external
+    tooling required to set it up (see `watchdog_service`'s module docstring
+    for why this one service isn't shared cross-project tower tooling)."""
+    from herdr_bridge.orchestration._state_paths import signal_state_dir
+    from herdr_bridge.signal import watchdog_service
+
+    project = _resolve_signal_project(args.project)
+    launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
+    socket_path = args.socket_path or _default_socket()
+    # Deliberately NOT os.environ["PATH"]: this command may be run from an
+    # arbitrary calling shell (including an agent session's PATH, full of
+    # ephemeral plugin-cache bin dirs) -- baking that into a long-lived
+    # scheduled launchd service is the wrong default. Use a stable, minimal
+    # baseline instead; --path-env is the escape hatch for anyone who needs
+    # something else on their PATH for herdr-commander to work.
+    path_env = args.path_env or _WATCHDOG_DEFAULT_PATH_ENV.format(home=Path.home())
+    try:
+        dest = watchdog_service.install_watchdog(
+            project,
+            launch_agents_dir=launch_agents_dir,
+            log_dir=signal_state_dir(project),
+            herdr_commander_path=args.herdr_commander_path,
+            interval_sec=args.interval_sec,
+            socket_path=socket_path,
+            path_env=path_env,
+            home_env=str(Path.home()),
+        )
+    except watchdog_service.WatchdogInstallError as exc:
+        _err(f"❌ {exc}")
+        return 1
+    _say(f"✅ Signal healthcheck watchdog installed: {dest}")
+    print(f"  runs every {args.interval_sec}s -- herdr-commander signal status --project {project} --notify-on-problem")
+    return 0
+
+
+def cmd_signal_uninstall_watchdog(args: argparse.Namespace) -> int:
+    """Unload and remove this project's Signal healthcheck watchdog (macOS)."""
+    from herdr_bridge.signal import watchdog_service
+
+    project = _resolve_signal_project(args.project)
+    launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
+    try:
+        removed = watchdog_service.uninstall_watchdog(project, launch_agents_dir=launch_agents_dir)
+    except watchdog_service.WatchdogInstallError as exc:
+        _err(f"❌ {exc}")
+        return 1
+    if removed:
+        _say(f"✅ Signal healthcheck watchdog removed for project={project}")
+    else:
+        _say(f"No Signal healthcheck watchdog was installed for project={project}")
+    return 0
+
+
 def _notify_signal_daemon_problem(project: str, problems: list[str]) -> None:
     """Best-effort desktop notification for `signal status --notify-on-problem`
     (task #84: `_doctor_check_signal_daemon` already knows how to detect a
@@ -2019,6 +2077,18 @@ def build_parser() -> argparse.ArgumentParser:
              "defaults off to avoid a redundant popup)",
     )
     spsigstatus.set_defaults(func=cmd_signal_status)
+
+    spsiginstall = sigsub.add_parser("install-watchdog", help="Install this project's Signal healthcheck as a launchd service (macOS)", parents=[_verbose_parent()])
+    spsiginstall.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsiginstall.add_argument("--interval-sec", dest="interval_sec", type=int, default=300, help="How often the watchdog checks (default 300s)")
+    spsiginstall.add_argument("--herdr-commander-path", dest="herdr_commander_path", default=None, help="Path to herdr-commander (defaults to resolving it on PATH)")
+    spsiginstall.add_argument("--socket-path", dest="socket_path", default=None, help="HERDR_SOCKET_PATH for the watchdog's environment (defaults to auto-detection)")
+    spsiginstall.add_argument("--path-env", dest="path_env", default=None, help="PATH for the watchdog's environment (defaults to a stable baseline, not the installing shell's own PATH)")
+    spsiginstall.set_defaults(func=cmd_signal_install_watchdog)
+
+    spsiguninstall = sigsub.add_parser("uninstall-watchdog", help="Unload and remove this project's Signal healthcheck launchd service (macOS)", parents=[_verbose_parent()])
+    spsiguninstall.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsiguninstall.set_defaults(func=cmd_signal_uninstall_watchdog)
 
     return p
 

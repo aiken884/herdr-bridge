@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -499,3 +500,153 @@ def test_signal_start_reports_pane_resolution_failure(monkeypatch, capsys):
     code = _parse_and_run(["signal", "start", "--project", "herdr-bridge"])
     assert code == 1
     assert "no candidate panes" in capsys.readouterr().err
+
+# -- signal install-watchdog / uninstall-watchdog ---------------------------
+
+def test_signal_install_watchdog_reports_success(monkeypatch, capsys):
+    from herdr_bridge.signal import watchdog_service
+
+    seen = {}
+
+    def _fake_install(project, **kwargs):
+        seen["project"] = project
+        seen["kwargs"] = kwargs
+        return Path("/Users/x/Library/LaunchAgents/herdr.signal-healthcheck.herdr-bridge.plist")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run(["signal", "install-watchdog", "--project", "herdr-bridge"])
+    assert code == 0
+    assert seen["project"] == "herdr-bridge"
+    out = capsys.readouterr().out
+    assert "installed" in out
+    assert "herdr.signal-healthcheck.herdr-bridge.plist" in out
+
+
+def test_signal_install_watchdog_honors_custom_interval(monkeypatch):
+    from herdr_bridge.signal import watchdog_service
+
+    seen = {}
+
+    def _fake_install(project, **kwargs):
+        seen["kwargs"] = kwargs
+        return Path("/tmp/x.plist")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run([
+        "signal", "install-watchdog", "--project", "herdr-bridge", "--interval-sec", "60",
+    ])
+    assert code == 0
+    assert seen["kwargs"]["interval_sec"] == 60
+
+
+def test_signal_install_watchdog_passes_correct_launch_agents_and_log_dirs(monkeypatch):
+    """2026-08-02 adversarial-review finding: these two kwargs were never
+    asserted, so a wrong value (e.g. accidentally sharing state with another
+    project) wouldn't have been caught by any test."""
+    from herdr_bridge.orchestration._state_paths import signal_state_dir
+    from herdr_bridge.signal import watchdog_service
+
+    seen = {}
+
+    def _fake_install(project, **kwargs):
+        seen["kwargs"] = kwargs
+        return Path("/tmp/x.plist")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run(["signal", "install-watchdog", "--project", "herdr-bridge"])
+    assert code == 0
+    assert seen["kwargs"]["launch_agents_dir"] == Path.home() / "Library" / "LaunchAgents"
+    assert seen["kwargs"]["log_dir"] == signal_state_dir("herdr-bridge")
+
+
+def test_signal_install_watchdog_uses_stable_default_path_not_the_calling_shells_path(monkeypatch):
+    """2026-08-02 real-deployment finding: install-watchdog used to capture
+    os.environ["PATH"] verbatim -- fine from a normal shell, but baking in
+    whatever ephemeral PATH the *installing* process happened to have (e.g. an
+    agent session's PATH, full of temp plugin-cache bin dirs) into a
+    long-lived scheduled service is the wrong default. It should use a
+    stable, minimal baseline unless the caller opts out via --path-env."""
+    from herdr_bridge.signal import watchdog_service
+
+    monkeypatch.setenv("PATH", "/some/ephemeral/agent-session/only/bin:/usr/bin")
+    seen = {}
+
+    def _fake_install(project, **kwargs):
+        seen["kwargs"] = kwargs
+        return Path("/tmp/x.plist")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run(["signal", "install-watchdog", "--project", "herdr-bridge"])
+    assert code == 0
+    assert "/some/ephemeral/agent-session/only/bin" not in seen["kwargs"]["path_env"]
+    assert "/opt/homebrew/bin" in seen["kwargs"]["path_env"]
+    assert "/usr/bin" in seen["kwargs"]["path_env"]
+
+
+def test_signal_install_watchdog_honors_explicit_path_env_override(monkeypatch):
+    from herdr_bridge.signal import watchdog_service
+
+    seen = {}
+
+    def _fake_install(project, **kwargs):
+        seen["kwargs"] = kwargs
+        return Path("/tmp/x.plist")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run([
+        "signal", "install-watchdog", "--project", "herdr-bridge",
+        "--path-env", "/custom/bin:/usr/bin",
+    ])
+    assert code == 0
+    assert seen["kwargs"]["path_env"] == "/custom/bin:/usr/bin"
+
+
+def test_signal_install_watchdog_reports_error_cleanly(monkeypatch, capsys):
+    from herdr_bridge.signal import watchdog_service
+
+    def _fake_install(project, **kwargs):
+        raise watchdog_service.WatchdogInstallError("herdr-commander not found on PATH")
+
+    monkeypatch.setattr(watchdog_service, "install_watchdog", _fake_install)
+
+    code = _parse_and_run(["signal", "install-watchdog", "--project", "herdr-bridge"])
+    assert code == 1
+    assert "herdr-commander not found" in capsys.readouterr().err
+
+
+def test_signal_uninstall_watchdog_reports_removed(monkeypatch, capsys):
+    from herdr_bridge.signal import watchdog_service
+
+    monkeypatch.setattr(watchdog_service, "uninstall_watchdog", lambda project, **k: True)
+
+    code = _parse_and_run(["signal", "uninstall-watchdog", "--project", "herdr-bridge"])
+    assert code == 0
+    assert "removed" in capsys.readouterr().out
+
+
+def test_signal_uninstall_watchdog_reports_nothing_installed(monkeypatch, capsys):
+    from herdr_bridge.signal import watchdog_service
+
+    monkeypatch.setattr(watchdog_service, "uninstall_watchdog", lambda project, **k: False)
+
+    code = _parse_and_run(["signal", "uninstall-watchdog", "--project", "herdr-bridge"])
+    assert code == 0
+    assert "No Signal healthcheck watchdog was installed" in capsys.readouterr().out
+
+
+def test_signal_uninstall_watchdog_reports_error_cleanly(monkeypatch, capsys):
+    from herdr_bridge.signal import watchdog_service
+
+    def _fake_uninstall(project, **kwargs):
+        raise watchdog_service.WatchdogInstallError("signal watchdog install/uninstall only supports macOS")
+
+    monkeypatch.setattr(watchdog_service, "uninstall_watchdog", _fake_uninstall)
+
+    code = _parse_and_run(["signal", "uninstall-watchdog", "--project", "herdr-bridge"])
+    assert code == 1
+    assert "only supports macOS" in capsys.readouterr().err

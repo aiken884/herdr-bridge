@@ -16,7 +16,7 @@ from herdr_bridge.models import AgentInfo, WaitResult, normalize_read_source
 
 
 def test_version():
-    assert herdr_bridge.__version__ == "0.7.0"
+    assert herdr_bridge.__version__ == "0.8.0"
 
 
 def test_agent_info_is_frozen():

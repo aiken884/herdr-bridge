@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-02 — Signal healthcheck watchdog
+
+### Added
+- **`herdr-commander signal install-watchdog` / `uninstall-watchdog`** (macOS, `herdr_bridge.signal.watchdog_service`): a scheduled healthcheck for your own Signal daemon (`signal status --notify-on-problem` on an interval, default 300s) is now a first-class herdr-bridge feature — no external tooling required to set it up. `install-watchdog` writes and (re)loads a `launchd` service (`herdr.signal-healthcheck.<project>`, no vendor/company prefix); `uninstall-watchdog` unloads and removes it. `--interval-sec`, `--herdr-commander-path`, `--socket-path`, and `--path-env` are all overridable; every filesystem/subprocess dependency in the underlying module is dependency-injected, so it's fully unit-tested without touching real launchd. Non-macOS platforms get a clear, actionable error rather than silently doing nothing. Two independent adversarial reviews (correctness/edge-cases and security/architecture-consistency) found and drove fixes before release: `launchctl bootstrap` failures leaking a raw `subprocess.CalledProcessError` instead of a clean error message, `--herdr-commander-path` accepting a relative path that would let a scheduled run silently fail to spawn every time, untranslated filesystem `OSError`s, plist file permissions, and a missing `--interval-sec` lower bound. Real-world deployment then caught one more issue neither review flagged: the default `PATH` baked into the plist was captured verbatim from the installing shell's own environment rather than a stable baseline.
+
 ## [0.7.0] — 2026-08-02 — Herdr Bridge Signal (6th communication layer)
 
 ### Added
