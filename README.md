@@ -200,10 +200,6 @@ Secret scanning on every push and every PR — full Git history, not just the di
 
 All contributions require a `Signed-off-by` trailer (`git commit -s`) certifying the [Developer Certificate of Origin](https://developercertificate.org/) — you wrote the change yourself or otherwise have the right to submit it under this project's Apache-2.0 license. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor workflow.
 
-## Support
-
-If herdr-bridge saves you from babysitting AI coding agents, you can support its development on [Ko-fi](https://ko-fi.com/aikenlin) (card or PayPal) or directly via [PayPal](https://paypal.me/aikenlin). Entirely optional — the library is and stays free.
-
 ## License
 
 Apache-2.0 (see [`LICENSE`](LICENSE)). herdr-bridge is an independent client of the Herdr socket API: it does not contain, copy, or derive from Herdr source code (see [`NOTICE`](NOTICE)). As of Herdr's last tagged release, Herdr itself is a separate project licensed under AGPL-3.0-or-later — **note that Herdr's own upstream changelog has an "Unreleased" entry announcing a relicense to Apache-2.0, not yet shipped in a tagged version; re-check Herdr's current license before relying on the AGPL-specific guidance below.**
@@ -221,3 +217,7 @@ That independence claim covers this package's own code — it says nothing about
 - [`docs/api-acp.md`](docs/api-acp.md) — `herdr_bridge.acp` command-plane API reference (provisional tier)
 - [`docs/testing.md`](docs/testing.md) — `FakeHerdrServer` usage guide for downstream contract testing without a real Herdr install
 - [`docs/light-user-quickstart.md`](docs/light-user-quickstart.md) — quickstart guide for occasional users of `herdr-commander`
+
+## Support
+
+If herdr-bridge saves you from babysitting AI coding agents, you can support its development on [Ko-fi](https://ko-fi.com/aikenlin) (card or PayPal) or directly via [PayPal](https://paypal.me/aikenlin). Entirely optional — the library is and stays free.
