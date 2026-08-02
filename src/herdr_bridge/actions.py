@@ -246,9 +246,16 @@ class BridgeActions:
 
         timeout_sec is the total time budget starting from the call (not an idle
         timeout); this function never raises — every outcome is expressed via
-        WaitResult.reason (predicate/timeout/agent_gone/error/blocked — it exits
-        early if the agent goes blocked and the predicate hasn't matched yet;
-        0.1.2 additive).
+        WaitResult.reason (predicate/timeout/agent_gone/error/blocked/stalled —
+        it exits early if the agent goes blocked and the predicate hasn't
+        matched yet; 0.1.2 additive). Herdr 0.7.5 added a new agent_status value,
+        "agent_prompt_stalled" (reported after five seconds without an observed
+        state change following an ineffective submission) — this exits early the
+        same way blocked does, with reason="stalled", rather than silently
+        waiting out the rest of the timeout budget. As with the timeout case,
+        the caller decides what to do next; herdr-bridge does not auto-resend
+        the command (governance memo rule 3: terminal commands aren't
+        idempotent — a stalled prompt carries the same non-idempotency risk).
 
         For marker matching, prefer `out.normalized_text` — a narrow pane's hard PTY
         line-wrapping can split a marker across two lines, so `out.text` won't match.
@@ -311,6 +318,10 @@ class BridgeActions:
                     res.update(success=False, reason="blocked", last=out)
                     match_ev.set()
                     return
+                if getattr(out, "status_at_read", None) == "agent_prompt_stalled":
+                    res.update(success=False, reason="stalled", last=out)
+                    match_ev.set()
+                    return
             except Exception:  # event callback must never crash the subscription reader thread
                 logger.debug("wait_until event callback failed", exc_info=True)
 
@@ -360,6 +371,8 @@ class BridgeActions:
                 return done(True, "predicate")
             if getattr(last_output, "status_at_read", None) == "blocked":
                 return done(False, "blocked")
+            if getattr(last_output, "status_at_read", None) == "agent_prompt_stalled":
+                return done(False, "stalled")
         except AgentNotFoundError:
             return done(False, "agent_gone")
         except Exception as exc:  # noqa: BLE001 — spec: must not let an exception escape uncaught

@@ -439,8 +439,18 @@ class AcpRouter(Agent if ACP_SDK_AVAILABLE else object):
                 # Event-driven: send the unblock key just once, letting the subsequent
                 # pane.agent_status_changed event trigger _handle to confirm recycle
                 # Removed the loop sleep + read (PPLX priority 1/4)
-                subprocess.run(["herdr", "agent", "send-keys", agent_ref, "tab", "enter"], timeout=5, capture_output=True, check=False)
-                subprocess.run(["herdr", "agent", "send-keys", agent_ref, "enter"], timeout=5, capture_output=True, check=False)
+                # Herdr 0.7.5 compat (live-verified 2026-08-02): `agent`-family commands
+                # now accept only a unique live agent name or the pane ID currently
+                # hosting that agent -- `agent_ref` here is `m.get("agent_id", pane)`
+                # pulled from a RemaGraph fleet-member record, which for every member
+                # recorded via dispatch_with_memory_confirm is the internal bookkeeping
+                # id "acp-router-confirm" (see used_aid there), never a real agent name.
+                # `herdr agent send-keys acp-router-confirm ...` is rejected outright
+                # (agent_not_found). pane_id genuinely is "the pane ID currently hosting
+                # that agent" here (this fires off a pane.agent_status_changed=blocked
+                # event), so target that instead of agent_ref.
+                subprocess.run(["herdr", "agent", "send-keys", pane_id, "tab", "enter"], timeout=5, capture_output=True, check=False)
+                subprocess.run(["herdr", "agent", "send-keys", pane_id, "enter"], timeout=5, capture_output=True, check=False)
                 # Assume the event will confirm once sent; the actual state is updated by the listener event's pane_state
                 _rg.store_memory(task_id, agent_ref, kind="status_update",
                     summary=f"Tower auto-unblocked {name}'s stuck permission (pane={pane_id}, via herdr-event)",

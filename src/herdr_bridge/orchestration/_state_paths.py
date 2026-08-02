@@ -55,6 +55,22 @@ def project_state_dir(project_id: str) -> Path:
     return Path.home() / ".local" / "state" / f"remagraph-hb-live-{safe}"
 
 
+def signal_state_dir(project_id: str) -> Path:
+    """Herdr Bridge Signal's own state dir (socket, lock file, pin file, ACK-state
+    store) for this project — `~/.local/state/herdr-bridge/signal/<project>/`.
+
+    Deliberately a separate top-level path from RemaGraph's `remagraph-*`
+    directories (design doc §2.4 defect 3 / §3.3a): Signal's socket/lock files
+    aren't RemaGraph data and shouldn't share a directory an external
+    `remagraph serve` process might treat as its own (see
+    `project_state_dir()`'s #66 self-protection docstring) — Signal has no such
+    external-process collision risk of its own, but reusing RemaGraph's
+    directory would create one where none previously existed.
+    """
+    safe = slugify_project(project_id)
+    return Path.home() / ".local" / "state" / "herdr-bridge" / "signal" / safe
+
+
 def standard_project_state_dir(project_id: str) -> Path:
     """The plain, un-deviated `remagraph-<project_id>` path -- what any external
     caller (another tower, the bare `remagraph` CLI, or anyone following

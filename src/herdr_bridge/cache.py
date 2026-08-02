@@ -21,7 +21,7 @@ from herdr_bridge.models import AgentInfo, AgentStatus
 logger = logging.getLogger("herdr_bridge.cache")
 
 _VALID_STATUSES: frozenset[str] = frozenset(
-    {"idle", "working", "blocked", "done", "unknown"})
+    {"idle", "working", "blocked", "done", "unknown", "agent_prompt_stalled"})
 
 
 def _status(raw: Any) -> AgentStatus:
