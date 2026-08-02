@@ -1,6 +1,6 @@
 [project]
 name = "herdr-bridge"
-version = "0.6.0"
+version = "0.7.0"
 description = "An AI command tower: when you dip into AI-assisted development, one sentence is enough to dispatch, track, and verify the work"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -82,7 +82,7 @@ addopts = [
 markers = [
   "integration: requires a real local herdr server (CI deselects these)",
   "empirical: requires a real herdr server for semantic verification (CI deselects these)",
-  "dogfood: calls real LLM-backed agent CLIs, costs money (CI deselects these; see tests/dogfooding/RUNBOOK.md)",
+  "dogfood: calls real LLM-backed agent CLIs, costs money (CI deselects these)",
 ]
 
 [tool.coverage.run]

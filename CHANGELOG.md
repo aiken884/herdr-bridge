@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-02 — Herdr Bridge Signal (6th communication layer)
+
+### Added
+- **Herdr Bridge Signal** (`herdr_bridge.signal`): a resident per-tower daemon that lets one tower push-wake another instead of relying on polling — an additive 6th communication layer alongside the existing 5 (Primary/Secondary/Tertiary/notify-pane/raw-input), none of whose behavior changes. Went through six rounds of adversarial design review plus a validation spike before implementation: the spike found `notify-pane` self-injection reliable (~1s, PASS) but Herdr's `events.subscribe`/`pane.output_matched` unreliable as a transport shortcut (FAIL — caching/replay behavior, not a stable per-event trigger), so the daemon uses a self-built Unix domain socket server rather than the originally-hoped-for simplification.
+  - `herdr-commander signal start` — start the resident daemon for this project (own pane_id resolved via a three-tier fallback: `HERDR_PANE_ID` env var → pin file → `herdr pane list` cwd scan, refusing to start on an ambiguous match rather than guessing).
+  - `herdr-commander signal send --to <project> --inbox-ref <ref>` — wake the target project's daemon; the wake envelope carries only a reference into your own memory/storage layer, never content itself. Applies escalation rules (retry-then-`daemon_unreachable`, `injection_unconfirmed` on a confirmed-but-not-injected timeout) and reports failures with a concrete, non-zero exit rather than a silent success.
+  - `herdr-commander signal status` — daemon liveness plus recent ACK records (Accepted → Injected → Seen → Accepted-for-work → Completed, each written by exactly one role — see `orchestration.memory`'s `mark_*` functions).
+  - `herdr-commander doctor` now distinguishes a stalled daemon (restart it) from a daemon still bound to a pane that no longer exists (restart it fresh) instead of reporting a bare "abnormal".
+  - Security model: HMAC-signed envelopes, TTL + in-memory nonce replay protection (deliberately not persisted, by design — replay protection only needs to cover the live delivery window), a 0600 Unix socket under `~/.local/state/herdr-bridge/signal/<project>/`, single-instance file lock (kernel-released on crash, no stale-PID logic needed).
+  - 78 new tests across envelope signing/verification, the single-instance lock (including a real subprocess-death test), the ACK state machine (including a same-row write race between the sender and receiver processes, found by testing rather than assumed away), the daemon's merge/idempotency/escalation logic over a real Unix socket, and the CLI/doctor integration.
+  - **Multi-instance field rollout**: real-world use across several independently-deployed instances of this project caught and drove fixes for three real bugs: (1) a bare `signal start`/`send`/`status` with no `--project` silently defaulted to `herdr-bridge` and could collide with its daemon lock; (2) the first fix's warning was itself dead code, because `herdr_bridge/__init__.py` unconditionally force-sets `os.environ["REMAGRAPH_PROJECT"] = "herdr-bridge"` as an import-time side effect, which a same-process unit test can't exercise — the actual fix drops `REMAGRAPH_PROJECT` from the signal project-resolution chain entirely and adds a real subprocess regression test; (3) the resulting `_resolve_signal_project()` now checks `--project` > `CT_PROJECT` > `HERDR_MEMORY_PROJECT`, warning on stderr whenever it falls through to the `herdr-bridge` default.
+
+### Fixed
+- **`signal send` could still crash the caller's whole CLI process on a completed-send race, even after an earlier fix for the same class of issue**: `mark_accepted()` and `mark_escalated()` in `orchestration/memory.py` both read the Signal ACK row once to decide what to do, then delegate to `_write_signal_state()`, which independently re-reads the row a *second* time to validate the transition. Across two independent OS processes (`outbound.py` the sender, `daemon.py` the receiver) with no shared lock between them, the daemon can advance the row all the way to `completed` in the gap between those two reads — the earlier fix only closed the *wide* version of this race (daemon already done by the first read); it left this *narrow* version open (daemon finishes between the first and second read), and `_validate_signal_transition()` would raise an uncaught `ValueError` (e.g. `"Invalid Signal transition: completed -> injection_unconfirmed. Allowed: []"`) straight through `outbound.send()`, crashing the CLI even though the send had already succeeded. Fixed with a bounded local retry (bounded, not pushed down into `_write_signal_state()` itself — other callers like `mark_injected()`/`mark_completed()` must keep raising on a genuinely illegal transition) that re-reads the freshest state and retries the whole decision, not just the write. 4 new regression tests, including one that reproduces the exact traceback message from a real field incident.
+- **`AgentNotFoundError` restore-after-restart limitation**: confirmed a third party independently filed and fixed this upstream in Herdr itself ([herdrdev/herdr#2065](https://github.com/herdrdev/herdr/issues/2065), fix merged 2026-07-30), but it has not shipped in any tagged Herdr release yet as of this writing — the documented workaround (delete and recreate the affected session) remains necessary until a newer Herdr release confirms the fix.
+
 ## [0.6.0] — 2026-08-01 — Herdr Bridge Memory branding, first public release
 
 ### Added
@@ -43,9 +59,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Operational
 - **Rescue-backup data migration**: filtered herdr-bridge-relevant records out of 6 backup DBs under `~/.local/state/_rescue-backup-20260725/` and wrote them back through the normal `store_memory()` path (with its built-in dedup check) into the primary store — 38 candidates, 34 migrated successfully, 4 correctly blocked by the dedup mechanism. A pure data operation, no code changes.
 
-## [0.4.0] — 2026-07-25 — Full TUI/headless communication dogfooding + delivery-state FSM rework
+## [0.4.0] — 2026-07-25 — Full TUI/headless communication real-usage validation + delivery-state FSM rework
 
-### Added (2026-07-25 — full TUI/headless communication dogfooding)
+### Added (2026-07-25 — full TUI/headless communication real-usage validation)
 - **`herdr-commander notify-pane` (fourth-layer communication)**: the only reliable channel for interactive TUI panes — atomic keystroke injection (a real newline sent in one shot, avoiding the TUI event-loop race condition from sending Enter as a separate step) plus screen-diff delivery verification, with per-TUI patterns (claude/opencode/codex/grok/agy) to judge submission success. Failure to confirm delivery within the retry budget produces an explicit error rather than a silent false success. Four readiness checks run before injection: blocking on interactive prompts (trust confirmations/menus/y-n/passwords), zombie-pane detection, busy-pane rejection (with an `--allow-busy` escape hatch), and startup-readiness waiting.
 - **Global install support**: `pipx install --editable <repo>` installs `herdr-commander` into `~/.local/bin`, so any project's panes can call it directly without being confined to herdr-bridge's own venv.
 - **Dedicated lightweight storage for the delivery-state FSM** (`orchestration/delivery_state_store.py`): state transitions now use a dedicated SQLite store instead of the general memory layer, writing a summary into RemaGraph only on terminal states (dual-write on terminal state) — fixing an architecture mismatch where a minute-scale FSM lifecycle was incorrectly subjected to the memory layer's semantic dedup (which requires similarity), causing consecutive transitions to be rejected outright.
@@ -270,9 +286,9 @@ Patch release surfaced by real-world usage across downstream projects with diver
 ### Operational
 - **搶救備份資料遷移**:從 `~/.local/state/_rescue-backup-20260725/` 6 個備份 DB 篩出跟 herdr-bridge 相關的記錄,經 `store_memory()` 正規路徑(含內建去重驗證)寫回正式庫,38 筆候選、34 筆成功遷移、4 筆被去重機制正確擋下。純資料操作,非程式碼變更。
 
-## [0.4.0] — 2026-07-25 — 全 TUI/headless 通訊 dogfooding + delivery-state FSM 重構
+## [0.4.0] — 2026-07-25 — 全 TUI/headless 通訊實測驗證 + delivery-state FSM 重構
 
-### Added(2026-07-25 — 全 TUI/headless 通訊 dogfooding)
+### Added(2026-07-25 — 全 TUI/headless 通訊實測驗證)
 - **`herdr-commander notify-pane`(第四層通訊)**:對互動式 TUI pane 唯一可靠的通訊管道——原子鍵盤注入(真正換行一次送出,避開分兩步送 Enter 的 TUI event loop race condition)+ 畫面 diff 驗證送達,per-TUI pattern(claude/opencode/codex/grok/agy)判定提交是否成功,重試上限內都無法確認送達會明確報錯,不會靜默假成功。注入前四道 ready check:互動式提示(信任確認/選單/y-n/密碼)阻擋、殭屍 pane 偵測、忙碌 pane 拒絕(`--allow-busy` 逃生門)、啟動就緒等待。
 - **全域安裝支援**:`pipx install --editable <repo>` 把 `herdr-commander` 裝到 `~/.local/bin`,任何專案的 pane 都能直接呼叫,不必侷限在 herdr-bridge 自己的 venv 內。
 - **delivery-state FSM 專屬輕量儲存**(`orchestration/delivery_state_store.py`):狀態轉移改用專屬 SQLite(不是通用記憶層),只有終局狀態才額外寫一筆摘要進 RemaGraph(Dual-Write on Terminal State)——修正 FSM 生命週期(分鐘級)誤用記憶層語意去重(規則要求相似度)導致連續轉移全被拒絕的架構錯配。
@@ -367,7 +383,7 @@ Patch release surfaced by real-world usage across downstream projects with diver
   - 優先 4:output_matched / permission 改善(廣義 subscribe output_matched 由 client 過濾;regex 多變體 + normalized + 僅 blocked 時觸發;_watch 同時訂兩種;wait_until 內建 permission sub)
 
 ### Changed
-- 所有治理層派工(run_task、via_acp、router prompt、batch)統一走 RemaGraph prepare/store
+- 所有上層派工(run_task、via_acp、router prompt、batch)統一走 RemaGraph prepare/store
 - CLI status 與 router list 暴露完整 registry metadata + summary + filter
 
 ### Verified
@@ -433,7 +449,7 @@ ACP 指令層:新增獨立的 `herdr_bridge.acp` 模組——暫定/實驗性的
 - `scripts/rebuild-patched-opencode.sh`——重建本地修補版 opencode 執行檔(修正上游一個真實 bug:子/subagent ACP session 從未被註冊,導致任何需要為委派 subagent 自身動作要求權限的 `session/prompt` 卡死)並刷新 `.vendor/opencode-patched/MANIFEST.json`。
 
 ### Known limitations(已追蹤、非阻擋項)
-- 目前只接上 `agent="opencode"`;其他 tier 要等治理層提供具名的 acpx agent 設定項目。
+- 目前只接上 `agent="opencode"`;其他 tier 要等上層提供具名的 acpx agent 設定項目。
 - `cancel()` 是終止底層 acpx 子行程,而非送出真正的 ACP `session/cancel` 協定訊息。
 - `prompt()` 的 `policy` 參數為維持簽章相容而接受,但不會生效——政策在 `ensure_session()` 當下就固定了。
 
@@ -441,7 +457,7 @@ ACP 指令層:新增獨立的 `herdr_bridge.acp` 模組——暫定/實驗性的
 
 ## [0.1.2] - 2026-07-19
 
-Blocked 狀態偵測切片(Option B「先做這塊」,PPLX 設計)。所有變更皆為附加性;凍結的五個 v0.1.0 函式簽章維持不變。工具層忠實回報 Herdr 原生的 `blocked` 狀態——解讀與路由邏輯留在治理層處理。
+Blocked 狀態偵測切片(Option B「先做這塊」,PPLX 設計)。所有變更皆為附加性;凍結的五個 v0.1.0 函式簽章維持不變。工具層忠實回報 Herdr 原生的 `blocked` 狀態——解讀與路由邏輯留給上層處理。
 
 ### Added
 - T-1:`wait_until` 在被觀察的 agent 進入 Herdr 的 `blocked` 狀態且 predicate 尚未命中時,提前以新的 `WaitResult.reason` 值 `"blocked"` 結束(predicate 命中優先)。不做基於閒置狀態的完成推斷。
