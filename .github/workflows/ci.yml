@@ -10,6 +10,7 @@ permissions:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow-failure == true }}
     strategy:
       fail-fast: false  # a known-flaky/broken leg (e.g. 3.14's pydantic runner issue) must not
                          # cancel the other legs before they get a chance to report their own result
@@ -30,6 +31,13 @@ jobs:
             python-version: "3.13"
           - os: ubuntu-latest
             python-version: "3.14"
+            # 2026-08-02: pydantic 2.13.4 (latest on PyPI) is incompatible with CPython 3.14's
+            # changed typing._eval_type() signature (TypeError: unexpected keyword argument
+            # 'prefer_fwd_module') — a genuine upstream gap, not something fixable on our side.
+            # fail-fast: false alone only stops this leg from cancelling the others; without
+            # allow-failure the overall `ci` run still reports failure. Keep the leg running (so
+            # it flips green the moment pydantic ships a fix) without blocking the workflow.
+            allow-failure: true
           - os: macos-latest
             python-version: "3.11"
     steps:
