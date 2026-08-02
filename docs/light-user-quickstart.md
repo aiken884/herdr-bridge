@@ -239,14 +239,21 @@ By default, `herdr-commander` only lives inside herdr-bridge's own worktree `.ve
 The fix: install it globally with `pipx` (the same pattern used for other CLIs, installed to `~/.local/bin`, which is already on every pane's PATH):
 
 ```bash
-pipx install --editable /path/to/herdr-bridge
+pipx install herdr-bridge
 ```
 
 Once installed:
 
 - **Any pane, in any project**, as long as it shows up in `herdr pane list`, can call `herdr-commander notify-pane --pane <target>` / `dispatch --target <target>` directly — regardless of which project the caller or the target pane belongs to. `--pane`/`--target` address panes managed globally by Herdr, not something scoped to the herdr-bridge project.
-- Because the install is `--editable`, pointing at the herdr-bridge main worktree, improvements on the main branch take effect automatically — but if that directory ever gets moved or deleted, the global command breaks with it. That's the one coupling point to be aware of.
 - This has been tested end-to-end: two panes from two different projects, running different TUIs, sent each other test messages via the globally installed `herdr-commander notify-pane`, and both confirmed delivery successfully.
+
+If you're developing herdr-bridge itself and want the global command to track your local worktree instead of a fixed PyPI release, install it in editable mode against your clone instead:
+
+```bash
+pipx install --editable /path/to/herdr-bridge
+```
+
+Improvements on your local branch take effect automatically — but if that directory ever gets moved or deleted, the global command breaks with it. That's the one coupling point to be aware of.
 
 ---
 
@@ -529,14 +536,21 @@ herdr-commander router unregister <name>
 解法：用 `pipx` 把它裝成全域指令（跟其他 CLI 同一模式，裝到 `~/.local/bin`，已在所有 pane 的 PATH 上）：
 
 ```bash
-pipx install --editable /path/to/herdr-bridge
+pipx install herdr-bridge
 ```
 
 裝好之後：
 
 - **任何 pane、任何專案**，只要出現在 `herdr pane list` 裡，都能直接呼叫 `herdr-commander notify-pane --pane <目標>` / `dispatch --target <目標>`，跟呼叫者或目標當下所屬的專案／工作目錄無關——`--pane`/`--target` 定位的是 Herdr 全域管理的 pane，不是 herdr-bridge 專案內部概念。
-- 因為是 `--editable` 指向 herdr-bridge 的 main worktree，main 分支之後的改進會自動生效；但如果這個目錄被搬走或刪除，全域指令會跟著壞掉——這是唯一的耦合點。
 - 已實測驗證：兩個不同專案、跑不同 TUI 的 pane，用全域安裝的 `herdr-commander notify-pane` 互相送達測試訊息，雙方都送達確認成功。
+
+如果你在開發 herdr-bridge 本身，想讓全域指令跟著你本機的 worktree 走、而不是固定在某個 PyPI 發布版，改用 editable 模式指向你的 clone：
+
+```bash
+pipx install --editable /path/to/herdr-bridge
+```
+
+這樣本機分支上的改進會自動生效；但如果這個目錄被搬走或刪除，全域指令會跟著壞掉——這是唯一的耦合點。
 
 ---
 
