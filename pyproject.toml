@@ -1,6 +1,6 @@
 [project]
 name = "herdr-bridge"
-version = "0.5.0"
+version = "0.7.0"
 description = "An AI command tower: when you dip into AI-assisted development, one sentence is enough to dispatch, track, and verify the work"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,36 +8,23 @@ license = "Apache-2.0"
 authors = [{ name = "Aiken Lin" }]
 keywords = ["herdr", "agent", "orchestration", "terminal", "claude-code", "commander"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Operating System :: POSIX",
   "Programming Language :: Python :: 3 :: Only",
   "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    # Embedded RemaGraph (highest-priority decision): herdr-bridge's governance layer,
-    # ACP pipeline, and LightCommander must call into RemaGraph's core directly
-    # (process_store / search_memories / models), not just the CLI fallback.
-    # RemaGraph owns the core memory engine; herdr-bridge owns orchestration + ACP + light UX.
-    #
-    # 2026-07-31: RemaGraph published to PyPI (0.4.0) — switched from a git+https URL
-    # pinned to a commit SHA to a normal PyPI version constraint. This retires the
-    # whole git-dependency saga (git+ssh -> git+https -> waiting on the repo to go
-    # public -> --no-sources workaround for the local editable override leaking into
-    # CI): a published package resolves the same way everywhere, no special CI
-    # handling needed for this dependency itself.
+    # Embedded RemaGraph: herdr-bridge's memory layer, ACP pipeline, and
+    # LightCommander call into RemaGraph's core directly (process_store /
+    # search_memories / models), not just the CLI fallback. RemaGraph owns the
+    # core memory engine; herdr-bridge owns orchestration + ACP + light UX.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
     "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
-    # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
-    # extra): Aiken's business decision — the fleet's goal is fully headless operation,
-    # and this path (dispatching to freshly-spawned headless agent processes) is a
-    # real capability that goal requires. Both blockers that previously held this back
-    # (the opencode skill leak and a user_text NameError) have now been fixed;
-    # examples/acp-echo-agent.py's connection failure could not be reproduced on
-    # re-verification (judged to have been a transient environment issue at the time,
-    # not a persistent bug — see the update in section 7 of
-    # docs/decisions/acp-layer-status-20260725.md). The package itself is very
-    # lightweight (pure Python, a 6-package dependency tree, negligible install time).
+    # ACP SDK: a core dependency, not optional — the fleet's goal is fully
+    # headless operation, and this path (dispatching to freshly-spawned headless
+    # agent processes) is a real capability that goal requires. The package
+    # itself is lightweight (pure Python, a 6-package dependency tree).
     "agent-client-protocol>=0.10.0,<0.12",
 ]
 
@@ -95,6 +82,7 @@ addopts = [
 markers = [
   "integration: requires a real local herdr server (CI deselects these)",
   "empirical: requires a real herdr server for semantic verification (CI deselects these)",
+  "dogfood: calls real LLM-backed agent CLIs, costs money (CI deselects these)",
 ]
 
 [tool.coverage.run]

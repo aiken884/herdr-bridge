@@ -63,6 +63,71 @@ def _resolve_memory_project(args_project: str | None, default: str = "herdr-brid
     )
 
 
+def _resolve_signal_project(args_project: str | None, default: str = "herdr-bridge") -> str:
+    """Resolve the effective project id for `signal start`/`send`/`status`.
+
+    Priority: --project flag > CT_PROJECT env > HERDR_MEMORY_PROJECT > default.
+
+    Unlike `_resolve_memory_project` (used by memory/dispatch/notify-pane,
+    where "which project's records" is an independent choice from "who am
+    I"), the signal subcommands are always about *this tower's own* daemon --
+    silently defaulting to "herdr-bridge" when a non-herdr-bridge tower
+    forgets --project doesn't just query the wrong project, it tries to
+    start/operate herdr-bridge's own daemon under someone else's identity
+    (2026-08-01 field report from a downstream deployment: bare `signal start` collided
+    with herdr-bridge's own daemon lock and failed). CT_PROJECT -- written by
+    bootstrap-tower.sh's session.env and set on every towerops launchd plist
+    -- is the actual "which tower is this" source of truth in this ecosystem,
+    so it's checked before the more general-purpose HERDR_MEMORY_PROJECT.
+
+    REMAGRAPH_PROJECT is deliberately NOT in this chain (2026-08-01 second
+    field report, a real bug in the first fix, not a stylistic
+    choice): `herdr_bridge/__init__.py` unconditionally sets
+    `os.environ["REMAGRAPH_PROJECT"] = "herdr-bridge"` as an import-time side
+    effect (`_ensure_remagraph_project`, orchestration/memory.py), on every
+    single process that imports this package -- which is every
+    `herdr-commander` invocation. That's a plain assignment, not
+    `setdefault`, so it clobbers any value the user exported themselves
+    *after* import runs, and it made the first version of this function's
+    warning genuinely dead code (the REMAGRAPH_PROJECT branch always hit,
+    so `resolved` was never `None`). REMAGRAPH_PROJECT is safe to read for
+    `_resolve_memory_project`'s original purpose (an intentional
+    advanced-user RemaGraph-layer bypass), but for "which tower is this"
+    it's self-polluted and cannot be trusted -- so signal resolution skips
+    it entirely rather than trying to out-guess when the value is genuine.
+
+    CT_PROJECT is only set on processes launchd/bootstrap actually started
+    with it in their environment -- an interactive shell inside an agent
+    session does NOT inherit it (each tool-call shell is a fresh process from
+    the profile, not a child of the bootstrap process). So a bare `signal
+    status` typed by hand in a non-herdr-bridge tower's own session still
+    falls through to `default`, now correctly triggering the warning below
+    (2026-08-01 follow-up field report: this used to be worse
+    than a plain wrong answer, because if herdr-bridge's own daemon happened
+    to be alive, the tower saw "✅ running" and reasonably assumed it was
+    looking at *its own* daemon). Since that fallback can't be fixed away by
+    adding more env vars to check -- there's no reliable "who is asking"
+    signal for a bare interactive shell -- the honest fix is to stop being
+    silent about it: warn on stderr whenever no explicit, trustworthy source
+    was found, every time, not just once.
+    """
+    resolved = (
+        args_project
+        or os.environ.get("CT_PROJECT")
+        or os.environ.get("HERDR_MEMORY_PROJECT")
+    )
+    if resolved is not None:
+        return resolved
+    _err(
+        f"⚠️  no --project (and no CT_PROJECT/HERDR_MEMORY_PROJECT env) given -- "
+        f"defaulting to project={default!r}. If this isn't the tower you meant, pass "
+        "--project explicitly (an interactive agent-session shell does NOT inherit "
+        "CT_PROJECT from bootstrap; REMAGRAPH_PROJECT is not checked here -- it's "
+        "force-set to 'herdr-bridge' as an import side effect and can't be trusted)."
+    )
+    return default
+
+
 def _default_socket() -> str | None:
     env = os.environ.get("HERDR_SOCKET_PATH")
     if env:
@@ -557,6 +622,52 @@ def _pane_read(pane_id: str, *, lines: int = 40, source: str = "recent") -> str:
         return ""
 
 
+def _read_until_stable(
+    pane_id: str, *, lines: int, max_wait: float, poll_interval: float = 0.05, stable_reads: int = 2,
+) -> str:
+    """Poll the pane screen until it stops changing (debounce/settle detection),
+    instead of a single fixed-delay read.
+
+    A fixed sleep-then-read-once check races the target TUI's own rendering
+    pipeline: under system load (several concurrent panes competing for CPU) or
+    for a long message (more text to parse/reflow/wrap), a short fixed delay can
+    catch a transient, not-yet-settled frame that happens to look like
+    "submitted" -- while the real, settled screen a moment later still shows the
+    message stuck in the input box (2026-08-01 blood-lesson: a ~600-char message
+    injected into a live external tower's pane was reported "delivery confirmed"
+    on the very first attempt, but was still sitting unsent in the input box when
+    manually re-verified a few seconds later -- feeding that exact stuck-screen
+    text into _looks_submitted() in isolation correctly judged "not submitted",
+    proving the detection logic itself was fine; the bug was purely in checking
+    before the screen had actually settled).
+
+    Reads repeatedly at `poll_interval`; once `stable_reads` consecutive reads
+    are byte-identical, the screen is considered settled and that snapshot is
+    returned immediately (the common case -- a short message -- typically
+    settles within one or two polls, so this adds negligible latency over the
+    old fixed delay). If `max_wait` elapses without reaching that many
+    consecutive identical reads, returns the last read as a best-effort
+    fallback -- the caller's own _looks_submitted() check still runs against
+    it, so this only removes the "checked too early" failure mode, it doesn't
+    introduce a new one.
+    """
+    deadline = time.monotonic() + max_wait
+    last: str | None = None
+    consecutive = 0
+    while True:
+        snap = _pane_read(pane_id, lines=lines)
+        if snap == last:
+            consecutive += 1
+            if consecutive >= stable_reads:
+                return snap
+        else:
+            consecutive = 1
+            last = snap
+        if time.monotonic() >= deadline:
+            return snap
+        time.sleep(poll_interval)
+
+
 def _pane_agent_status(pane_id: str) -> str | None:
     """A secondary signal only; known to have false negatives (see CLAUDE.md), must
     not be treated as the sole source of truth."""
@@ -837,7 +948,7 @@ def _detect_blocking_prompt(snapshot: str) -> str | None:
     the tail lines is enough to catch it; whereas searching the whole snapshot would
     misjudge a pane as being stuck on an interactive prompt just because the agent's
     conversation history happens to mention "password"/"(y/n)"/"enter to confirm" —
-    for example, while discussing these very keywords (common during dogfooding:
+    for example, while discussing these very keywords (common in real usage:
     dispatched messages and replies frequently mention trust-confirmation
     dialogs/y-n prompts/password entry as topics) — rejecting an injection that was
     actually legitimate (discovered 2026-07-25).
@@ -937,7 +1048,33 @@ def _looks_submitted(
         tail_norm = re.sub(r"\s+", "", tail)
         if tail_norm and tail_norm in box_norm:
             return _SubmitCheck(False, False)
-        return _SubmitCheck(True, False)
+        # 2026-08-02 field incident: the box has *some* content, but it
+        # matches neither the message's head nor its tail. This is
+        # deliberately NOT treated the same as the empty-box case above --
+        # unlike a literally empty box, "some unrelated content" is
+        # ambiguous by default: it can mean the message truly left (a TUI
+        # idle placeholder like Gemini's) or it can mean the substring match
+        # just didn't line up (wrapping/normalization) while the message is
+        # still sitting right there. The old logic treated this as
+        # confirmed-submitted unconditionally, which skipped the caller's
+        # follow-up Enter and left a real Signal wake message stuck in a
+        # target's input box while notify-pane reported success.
+        #
+        # The one case this must still resolve as confirmed-submitted (else
+        # the Gemini idle-placeholder scenario this branch was originally
+        # written for gets stuck ambiguous forever, see the block above) is
+        # when `before`'s own box content proves the message really was
+        # sitting in this same box a moment ago -- i.e. the box's content
+        # demonstrably changed out from under this exact message, not just
+        # "the box currently contains something else, for all we know."
+        before_box = _extract_input_box_text(before, markers=box_markers)
+        if before_box is not None:
+            before_box_norm = re.sub(r"\s+", "", before_box)
+            if (head_norm and head_norm in before_box_norm) or (
+                tail_norm and tail_norm in before_box_norm
+            ):
+                return _SubmitCheck(True, False)
+        return _SubmitCheck(False, True)
 
     after_lines = after.splitlines()
     located = tui_patterns.locate_any(after_lines, tui=tui)
@@ -1096,6 +1233,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 problems.append("exception during Herdr Bridge Memory diagnostics (run with -v for detail)")
                 _err("❌ exception during Herdr Bridge Memory diagnostics (run with -v for detail)")
 
+    _doctor_check_signal_daemon(project, problems)
+
     print()
     if problems:
         _err(f"❌ found {len(problems)} problem(s):")
@@ -1104,6 +1243,234 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         return 1
     _say("✅ All checks passed")
     return 0
+
+
+def _doctor_check_signal_daemon(project: str, problems: list[str]) -> None:
+    """Design doc §3.4: distinguish "daemon half-dead" (situation A: restart the
+    daemon) from "pane was rebuilt" (situation B: re-run bootstrap) rather than
+    reporting a bare "abnormal" — the two need different remedies."""
+    from herdr_bridge.orchestration._state_paths import signal_state_dir
+
+    state_dir = signal_state_dir(project)
+    lock_path = state_dir / "daemon.lock"
+    pin_path = state_dir / "pane_id.pin"
+
+    if not lock_path.exists():
+        _say("ℹ️  Signal daemon has never been started for this project (not an error — signal start when ready)")
+        return
+
+    from herdr_bridge.signal.lock import DaemonAlreadyRunning, SingleInstanceLock
+
+    probe = SingleInstanceLock(lock_path)
+    try:
+        probe.acquire()
+        probe.release()
+        problems.append(
+            "Signal daemon lock file exists but is not held by any live process "
+            "(the daemon has stopped) — restart it with `herdr-commander signal start`"
+        )
+        _err("❌ Signal daemon is not running (lock not held)")
+        return
+    except DaemonAlreadyRunning:
+        pass  # a live process holds the lock -- daemon is alive, continue below
+
+    if pin_path.exists():
+        pinned_pane_id = pin_path.read_text().strip()
+        out = subprocess.run(["herdr", "pane", "list"], capture_output=True, text=True, timeout=10, check=False)
+        try:
+            data = json.loads(out.stdout)
+            panes = data["result"].get("panes", data["result"])
+            still_exists = any(p.get("pane_id") == pinned_pane_id for p in panes)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            still_exists = True  # can't tell -- don't false-positive situation B
+        if not still_exists:
+            problems.append(
+                f"Signal daemon is running but bound to pane_id={pinned_pane_id!r}, which no "
+                "longer exists (situation B: the pane was rebuilt) — re-run bootstrap to bind "
+                "the new pane_id, restarting the daemon alone will not fix this"
+            )
+            _err(f"❌ Signal daemon's pane_id={pinned_pane_id!r} no longer exists (pane was rebuilt)")
+            return
+    _say("✅ Signal daemon is running")
+
+
+def _shared_secret_path(project_id: str) -> Path:
+    from herdr_bridge.orchestration._state_paths import signal_state_dir
+
+    return signal_state_dir(project_id) / "shared_secret"
+
+
+def _read_shared_secret_asserting_ownership(path: Path) -> str:
+    """Read an existing shared-secret file, asserting it's actually owned by
+    this process's OS user (2026-08-01 DEPLOYMENT CONSTRAINT fix, see
+    signal/envelope.py's docstring for the full rationale): the entire
+    "shared secret" scheme only works because sender and receiver happen to
+    be the same OS user reading the same file on the same host. If that file
+    somehow belongs to a different user -- e.g. it was copied over from
+    another machine, or something unexpected wrote it -- silently reading it
+    anyway would produce a confusing "bad hmac" failure downstream instead
+    of pointing at the real, fixable problem.
+    """
+    own_uid = os.getuid()
+    file_uid = path.stat().st_uid
+    if file_uid != own_uid:
+        raise HerdrBridgeError(
+            f"shared secret file {path} is owned by uid={file_uid}, not this "
+            f"process's uid={own_uid} -- Herdr Bridge Signal only supports "
+            "same-user deployment (see signal/envelope.py's DEPLOYMENT "
+            "CONSTRAINT docstring); refusing to use a secret that isn't ours"
+        )
+    return path.read_text().strip()
+
+
+def _load_or_create_shared_secret(project_id: str) -> str:
+    """§3.3a: per-tower shared secret, generated at bootstrap time, never
+    hardcoded. Stored 0600 under the project's own Signal state dir.
+
+    Created atomically at mode 0600 from the very first byte (O_CREAT|O_EXCL),
+    not written-then-chmod'd -- a write-then-chmod sequence leaves a real
+    window where the secret sits on disk at the process's default umask
+    (commonly 0644/world-readable) before the restrictive mode is applied.
+    O_EXCL doubles as the concurrent-first-run race fix: if another process
+    wins the create, this one just reads what they wrote instead of
+    clobbering it.
+    """
+    import errno
+    import secrets
+
+    path = _shared_secret_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _read_shared_secret_asserting_ownership(path)
+    except OSError as exc:
+        if exc.errno != errno.EEXIST:
+            raise
+        return _read_shared_secret_asserting_ownership(path)
+    try:
+        secret = secrets.token_hex(32)
+        with os.fdopen(fd, "w") as f:
+            f.write(secret)
+    except BaseException:
+        path.unlink(missing_ok=True)  # don't leave a half-written secret behind
+        raise
+    return secret
+
+
+def cmd_signal_start(args: argparse.Namespace) -> int:
+    """Start the resident Signal daemon for this project (design doc §3.4).
+    Normally invoked by bootstrap, not by hand -- runs in the foreground
+    (the caller is expected to background it, e.g. `nohup ... &`)."""
+    import asyncio
+
+    from herdr_bridge.signal import daemon as signal_daemon
+    from herdr_bridge.signal.lock import DaemonAlreadyRunning
+
+    project = _resolve_signal_project(args.project)
+    try:
+        own_pane_id = signal_daemon.resolve_own_pane_id(project)
+    except signal_daemon.PaneIdResolutionError as exc:
+        _err(f"❌ {exc}")
+        return 1
+    _say(f"Signal daemon starting for project={project}, pane_id={own_pane_id}")
+    shared_secret = _load_or_create_shared_secret(project)
+    try:
+        asyncio.run(signal_daemon.run(project, shared_secret))
+    except DaemonAlreadyRunning as exc:
+        _err(f"❌ {exc}")
+        return 1
+    except KeyboardInterrupt:
+        _say("Signal daemon stopped")
+    return 0
+
+
+def cmd_signal_send(args: argparse.Namespace) -> int:
+    """Wake the target project's Signal daemon (design doc §3.2/§3.5). Assumes
+    the caller already wrote the real content via `herdr-commander memory note`
+    or equivalent -- this only ever sends the wake control signal (§3.3)."""
+    import asyncio
+
+    from herdr_bridge.orchestration._state_paths import signal_state_dir
+    from herdr_bridge.signal import outbound
+
+    from_project = _resolve_signal_project(args.project)
+    to_project = args.to
+    socket_path = signal_state_dir(to_project) / f"{to_project}.sock"
+    shared_secret = _load_or_create_shared_secret(to_project)
+
+    result = asyncio.run(outbound.send(
+        from_project, to_project, args.inbox_ref, args.kind,
+        from_project, shared_secret, socket_path,
+    ))
+
+    if result.status == "injected":
+        _say(f"✅ Signal delivered and injected (message_id={result.message_id})")
+        return 0
+    if result.status == "daemon_unreachable":
+        _err(
+            f"❌ Signal daemon unreachable for project={to_project} (message_id={result.message_id}) "
+            "-- your content is still safe in RemaGraph and will be seen next time they check; "
+            "run `herdr-commander doctor --project " + to_project + "` to diagnose"
+        )
+        return 1
+    if result.status == "deduplicated_inflight":
+        _err(
+            f"⚠️  Not sent (message_id={result.message_id}): another signal for the same "
+            f"--to {to_project} --inbox-ref {args.inbox_ref} is already in flight -- retrying "
+            "right now won't help. Run `herdr-commander signal status --project " + to_project +
+            "` to check its state, or wait for it to complete before resending."
+        )
+        return 1
+    # "injection_failed_transient": daemon was reachable and accepted it, but
+    # didn't confirm injection within the window -- worth a plain retry.
+    _err(
+        f"⚠️  Signal sent and Accepted but injection unconfirmed (message_id={result.message_id}) "
+        "-- content is safe in RemaGraph; consider falling back to `herdr-commander notify-pane` "
+        "for guaranteed delivery if this is urgent"
+    )
+    return 1
+
+
+def cmd_signal_status(args: argparse.Namespace) -> int:
+    """Show this project's Signal daemon liveness and recent ACK records."""
+    project = _resolve_signal_project(args.project)
+    problems: list[str] = []
+    _doctor_check_signal_daemon(project, problems)
+
+    from herdr_bridge.orchestration import list_recent_signal_states
+
+    records = list_recent_signal_states(project, limit=args.top_k)
+    if not records:
+        _say("No Signal records yet for this project")
+    else:
+        print(f"\nRecent Signal records (project={project}):")
+        for r in records:
+            print(f"  {r['message_id']}  state={r['state']:<22} inbox_ref={r['inbox_ref']}")
+
+    if problems and getattr(args, "notify_on_problem", False):
+        _notify_signal_daemon_problem(project, problems)
+    return 0 if not problems else 1
+
+
+def _notify_signal_daemon_problem(project: str, problems: list[str]) -> None:
+    """Best-effort desktop notification for `signal status --notify-on-problem`
+    (task #84: `_doctor_check_signal_daemon` already knows how to detect a
+    dead/misbound daemon, but until now nothing scheduled it or surfaced a
+    failure outside the terminal -- every daemon was a bare `nohup ... &`
+    with no supervision, so a crash went unnoticed indefinitely). Never
+    raises: a notification failure must not turn a healthcheck script into a
+    crashing one."""
+    try:
+        subprocess.run(
+            [
+                "herdr", "notification", "show", f"Herdr Bridge Signal 異常［{project}］",
+                "--body", problems[0], "--position", "top-right", "--sound", "request",
+            ],
+            capture_output=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # best-effort: a notification failure must not fail the healthcheck itself
 
 
 def cmd_notify_pane(args: argparse.Namespace) -> int:
@@ -1200,8 +1567,7 @@ def cmd_notify_pane(args: argparse.Namespace) -> int:
             _err(f"Attempt {attempt_no}: send-text call failed (herdr CLI returned non-zero or raised an exception)")
             continue
 
-        time.sleep(args.settle_delay)
-        after = _pane_read(pane_id, lines=args.read_lines)
+        after = _read_until_stable(pane_id, lines=args.read_lines, max_wait=args.settle_delay)
         last_status = _pane_agent_status(pane_id)
 
         check1 = _looks_submitted(before, after, message, tui=args.tui)
@@ -1218,8 +1584,7 @@ def cmd_notify_pane(args: argparse.Namespace) -> int:
         # harmless Enter than to miss a message that's genuinely still stuck.
         fallback_used = True
         _pane_send_keys(pane_id, "Enter")
-        time.sleep(args.settle_delay)
-        after2 = _pane_read(pane_id, lines=args.read_lines)
+        after2 = _read_until_stable(pane_id, lines=args.read_lines, max_wait=args.settle_delay)
         last_status = _pane_agent_status(pane_id)
 
         check2a = _looks_submitted(after, after2, message, tui=args.tui)
@@ -1302,6 +1667,157 @@ def cmd_memory_note(args: argparse.Namespace) -> int:
     else:
         _err(f"❌ failed to store memory note (status={result.get('status', 'unknown')}; run with -v for detail)")
     return 1
+
+
+def cmd_memory_search(args: argparse.Namespace) -> int:
+    """Search Herdr Bridge Memory: the CLI-escape-hatch counterpart to
+    `memory note`, for looking up memories/task handoffs (e.g. a cross-project
+    request left for this project) without needing to know the underlying
+    `remagraph` CLI directly.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    tags: list[str] | None = None
+    if args.tags:
+        import json as _json
+        try:
+            tags = _json.loads(args.tags) if args.tags.strip().startswith("[") else [t.strip() for t in args.tags.split(",") if t.strip()]
+        except _json.JSONDecodeError:
+            tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+
+    try:
+        results = _rg.search_memories(
+            args.query or "",
+            top_k=args.top_k,
+            kind=args.kind,
+            status=args.status,
+            tags=tags,
+            project_id=project,
+            agent_id=args.agent_id,
+            task_id=args.task_id,
+            all_projects=args.all_projects,
+            cross_project_label=args.cross_project_label,
+        )
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    scope = f"project={project}" + (", all-projects" if args.all_projects else "")
+    if not results:
+        _say(f"No memories found ({scope}).")
+        return 0
+
+    _say(f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} ({scope}):")
+    for r in results:
+        kind = r.get("kind", "?")
+        task_id = r.get("task_id", "?")
+        agent_id = r.get("agent_id", "?")
+        ts = str(r.get("timestamp", ""))[:19]
+        summary = (r.get("summary") or r.get("handoff_note") or "")[:200]
+        print(f"  [{kind}] {task_id} (agent={agent_id}, {ts})")
+        if summary:
+            print(f"    {summary}")
+    return 0
+
+
+def cmd_memory_status(args: argparse.Namespace) -> int:
+    """List recent Herdr Bridge Memory activity for a project (the
+    `remagraph status` counterpart) -- a quick "what's happened lately"
+    view, as opposed to `memory search`'s keyword lookup. Thin wrapper
+    around search_memories() with an empty query (list mode).
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    try:
+        results = _rg.search_memories(
+            "",
+            top_k=args.top_k,
+            kind=args.kind,
+            project_id=project,
+            all_projects=args.all_projects,
+        )
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    scope = f"project={project}" + (", all-projects" if args.all_projects else "")
+    if not results:
+        _say(f"No recent memory activity ({scope}).")
+        return 0
+
+    _say(f"Recent activity ({scope}):")
+    for r in results:
+        kind = r.get("kind", "?")
+        task_id = r.get("task_id", "?")
+        agent_id = r.get("agent_id", "?")
+        ts = str(r.get("timestamp", ""))[:19]
+        namespace = r.get("_namespace", "?")
+        summary = (r.get("summary") or r.get("handoff_note") or "")[:160]
+        print(f"  [{kind}/{namespace}] {task_id} (agent={agent_id}, {ts})")
+        if summary:
+            print(f"    {summary}")
+    return 0
+
+
+def cmd_memory_maintain(args: argparse.Namespace) -> int:
+    """Apply Herdr Bridge Memory's retention policy: archive stale
+    delivery-state-tagged records past their SLA (the `remagraph maintain`
+    counterpart, scoped to herdr-bridge's own retention concept). Defaults
+    to a dry run -- pass --apply to actually archive.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    project = _resolve_memory_project(args.project)
+    try:
+        result = _rg.apply_retention(project, dry_run=not args.apply)
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    mode = "dry run" if result.get("dry_run", True) else "applied"
+    _say(f"Retention ({mode}, project={project}): {result.get('archived', 0)} record(s) archived")
+    if getattr(args, "verbose", False):
+        print(f"  policy: {result.get('policy')}")
+    if result.get("dry_run", True) and result.get("archived", 0) > 0:
+        _say("Re-run with --apply to actually archive these.")
+    return 0
+
+
+def cmd_memory_link(args: argparse.Namespace) -> int:
+    """Declare a relation between two projects (the `remagraph link`
+    counterpart), so `memory search --include-related` can traverse it.
+    """
+    if _rg is None or not _rg.is_remagraph_enabled():
+        _err("Herdr Bridge Memory is not available in this environment.")
+        return 1
+
+    try:
+        _rg.link_project(args.from_project, args.to_project, args.relation)
+    except ValueError as exc:
+        _err(str(exc))
+        return 1
+    except HerdrBridgeError as exc:
+        if getattr(args, "verbose", False):
+            raise
+        _err(str(exc))
+        return 1
+
+    _say(f"Linked {args.from_project} -> {args.to_project} ({args.relation})")
+    return 0
 
 
 def _verbose_parent() -> argparse.ArgumentParser:
@@ -1399,7 +1915,7 @@ def build_parser() -> argparse.ArgumentParser:
     spn.add_argument("--pane", dest="pane_id", required=True, help="Target pane_id (required, auto-routing is prohibited)")
     spn.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spn.add_argument("--retries", type=int, default=3, help="Delivery-verification retry limit (each attempt includes atomic injection + a fallback Enter if not submitted), default 3")
-    spn.add_argument("--settle-delay", type=float, default=0.35, help="Seconds to wait after each injection/fallback Enter for the screen to finish rendering, default 0.35 (PPLX recommends the 200-500ms range)")
+    spn.add_argument("--settle-delay", type=float, default=1.5, help="Max seconds to poll the screen for after each injection/fallback Enter, waiting for it to stop changing (debounced settle detection, not a fixed sleep) before checking whether the message was submitted, default 1.5 -- the common case (a short message) settles within one or two 50ms polls, so this only matters as a ceiling for long messages or a loaded system (2026-08-01 fix: a fixed short sleep could check before the screen had actually settled, see _read_until_stable())")
     spn.add_argument("--read-lines", type=int, default=40, help="Number of lines to sample on each herdr pane read, default 40")
     spn.add_argument(
         "--tui",
@@ -1427,15 +1943,15 @@ def build_parser() -> argparse.ArgumentParser:
     spdoc.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spdoc.set_defaults(func=cmd_doctor)
 
-    # memory: Herdr Bridge Memory CLI escape hatch (currently just "note"; more
-    # may be added later, kept deliberately minimal rather than replicating the
-    # full underlying remagraph CLI)
+    # memory: Herdr Bridge Memory CLI escape hatch ("note" to write, "search"
+    # to read; kept deliberately minimal rather than replicating the full
+    # underlying remagraph CLI)
     # NOTE: parents=[_verbose_parent()] is deliberately NOT added here (unlike
     # every other subparser) -- "memory" nests a second subparsers level
-    # ("note", below), and adding -v/--verbose at both levels reproduces the
-    # exact same clobbering hazard _verbose_parent()'s docstring describes,
-    # one level deeper (verified: `memory -v note ...` would silently drop
-    # -v). Only the leaf "note" subparser gets it.
+    # ("note"/"search", below), and adding -v/--verbose at both levels
+    # reproduces the exact same clobbering hazard _verbose_parent()'s
+    # docstring describes, one level deeper (verified: `memory -v note ...`
+    # would silently drop -v). Only the leaf subparsers get it.
     spmem = sub.add_parser("memory", help="Herdr Bridge Memory operations")
     memsub = spmem.add_subparsers(dest="memory_action", required=True)
     spnote = memsub.add_parser("note", help="Log a memory note for a task/agent", parents=[_verbose_parent()])
@@ -1444,6 +1960,65 @@ def build_parser() -> argparse.ArgumentParser:
     spnote.add_argument("--agent-id", dest="agent_id", required=True, help="Agent id to associate this note with")
     spnote.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spnote.set_defaults(func=cmd_memory_note)
+
+    spsearch = memsub.add_parser("search", help="Search memories/task handoffs (e.g. a cross-project request left for this project)", parents=[_verbose_parent()])
+    spsearch.add_argument("query", nargs="?", default="", help="Full-text keyword query (optional; omit to just filter/list by the flags below)")
+    spsearch.add_argument("--top-k", dest="top_k", type=int, default=10, help="Max results to return (default 10)")
+    spsearch.add_argument("--kind", default=None, choices=["task_handoff", "status_update", "discovered_constraint", "fleet_member"], help="Filter by memory kind")
+    spsearch.add_argument("--status", default=None, choices=["active", "superseded", "invalidated"], help="Filter by status")
+    spsearch.add_argument("--tags", default=None, help="Filter by tags (comma-separated, or a JSON array)")
+    spsearch.add_argument("--agent-id", dest="agent_id", default=None, help="Filter by agent id")
+    spsearch.add_argument("--task-id", dest="task_id", default=None, help="Filter by task id")
+    spsearch.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsearch.add_argument("--all-projects", dest="all_projects", action="store_true", help="Don't filter to --project; search everything in this memory store (e.g. when a cross-project message's project_id doesn't match what you expected)")
+    spsearch.add_argument("--cross-project-label", dest="cross_project_label", default=None, help="Search across each known project's own separate memory store by a namespaced label (e.g. 'topic:how-to-contact-tower')")
+    spsearch.set_defaults(func=cmd_memory_search)
+
+    spmemstatus = memsub.add_parser("status", help="List recent memory activity for a project", parents=[_verbose_parent()])
+    spmemstatus.add_argument("--top-k", dest="top_k", type=int, default=10, help="Max entries to show (default 10)")
+    spmemstatus.add_argument("--kind", default=None, choices=["task_handoff", "status_update", "discovered_constraint", "fleet_member"], help="Filter by memory kind")
+    spmemstatus.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spmemstatus.add_argument("--all-projects", dest="all_projects", action="store_true", help="Don't filter to --project; show everything in this memory store")
+    spmemstatus.set_defaults(func=cmd_memory_status)
+
+    spmaintain = memsub.add_parser("maintain", help="Apply the retention policy (archive stale delivery-state records)", parents=[_verbose_parent()])
+    spmaintain.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spmaintain.add_argument("--apply", action="store_true", help="Actually archive (default is a dry run that only reports what would be archived)")
+    spmaintain.set_defaults(func=cmd_memory_maintain)
+
+    splink = memsub.add_parser("link", help="Declare a relation between two projects (for --include-related traversal in search)", parents=[_verbose_parent()])
+    splink.add_argument("--from", dest="from_project", required=True, help="Source project id")
+    splink.add_argument("--to", dest="to_project", required=True, help="Target project id")
+    splink.add_argument("--relation", required=True, choices=["depends_on", "sibling", "shares_upstream", "monorepo_member"], help="Relation type (treated as bidirectional during traversal)")
+    splink.set_defaults(func=cmd_memory_link)
+
+    # signal: Herdr Bridge Signal (design doc §3.7) -- cross-tower wake-up
+    # acceleration. Same NOTE as "memory" above re: -v placement (nested
+    # subparsers -- only leaf commands get _verbose_parent()).
+    spsig = sub.add_parser("signal", help="Herdr Bridge Signal: cross-tower wake-up daemon")
+    sigsub = spsig.add_subparsers(dest="signal_action", required=True)
+
+    spsigstart = sigsub.add_parser("start", help="Start the resident Signal daemon for this project (usually invoked by bootstrap)", parents=[_verbose_parent()])
+    spsigstart.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsigstart.set_defaults(func=cmd_signal_start)
+
+    spsigsend = sigsub.add_parser("send", help="Wake the target project's Signal daemon", parents=[_verbose_parent()])
+    spsigsend.add_argument("--to", required=True, help="Target project id to wake")
+    spsigsend.add_argument("--inbox-ref", dest="inbox_ref", required=True, help="Reference to the RemaGraph content already stored (task_id/agent_id) -- Signal never carries content itself")
+    spsigsend.add_argument("--kind", default="task_handoff", help="Envelope kind, default task_handoff")
+    spsigsend.add_argument("--project", default=None, help="Sending project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsigsend.set_defaults(func=cmd_signal_send)
+
+    spsigstatus = sigsub.add_parser("status", help="Show this project's Signal daemon liveness and recent ACK records", parents=[_verbose_parent()])
+    spsigstatus.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
+    spsigstatus.add_argument("--top-k", dest="top_k", type=int, default=10, help="Max records to show (default 10)")
+    spsigstatus.add_argument(
+        "--notify-on-problem", action="store_true",
+        help="Also push a desktop notification if a problem is found (for unattended/scheduled "
+             "healthcheck calls -- plain interactive use already sees the stderr output, so this "
+             "defaults off to avoid a redundant popup)",
+    )
+    spsigstatus.set_defaults(func=cmd_signal_status)
 
     return p
 

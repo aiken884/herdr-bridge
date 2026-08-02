@@ -11,11 +11,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-AgentStatus = Literal["idle", "working", "blocked", "done", "unknown"]
+AgentStatus = Literal["idle", "working", "blocked", "done", "unknown",
+                      "agent_prompt_stalled"]
 
 # 0.1.2 T-1: additive addition of "blocked" — exits early when an agent is stuck
 # waiting for approval/input; the existing four-value semantics are unchanged
-WaitReason = Literal["predicate", "timeout", "agent_gone", "error", "blocked"]
+# Herdr 0.7.5: additive addition of "stalled" — mirrors "blocked" for the new
+# agent_prompt_stalled status (a prompt wait stuck >5s with no observed state
+# change after an ineffective submission)
+WaitReason = Literal["predicate", "timeout", "agent_gone", "error", "blocked",
+                     "stalled"]
 
 _SOURCE_ALIASES = {
     "visible": "visible",

@@ -29,13 +29,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from herdr_bridge.errors import DeliveryStateWriteFailed, HerdrMemoryError
+from herdr_bridge.errors import DeliveryStateWriteFailed, HerdrMemoryError, SignalStateWriteFailed
 from herdr_bridge.orchestration import delivery_state_store as _fsm_store
+from herdr_bridge.orchestration import signal_state_store as _signal_store
 from herdr_bridge.orchestration._state_paths import (
     project_state_dir as _project_state_dir,
 )
 from herdr_bridge.orchestration._state_paths import (
+    signal_state_dir as _signal_state_dir,
+)
+from herdr_bridge.orchestration._state_paths import (
     slugify_project as _slugify_project,
+)
+from herdr_bridge.orchestration._state_paths import (
+    standard_project_state_dir as _standard_project_state_dir,
 )
 
 logger = logging.getLogger("herdr_bridge.orchestration.memory")
@@ -83,8 +90,10 @@ _REMAGRAPH_MODE = _read_deprecated_or("HERDR_MEMORY_MODE", "auto").lower()
 # the CLI fallback is only for non-herdr contexts.
 try:
     from remagraph.db import connect as _rg_connect
+    from remagraph.db import declare_project_edge as _rg_declare_project_edge
     from remagraph.models import SearchRequest as _RgSearchRequest
     from remagraph.models import StoreRequest as _RgStoreRequest
+    from remagraph.search import sanitize_fts5_query as _rg_sanitize_fts5_query
     from remagraph.search import search_memories as _rg_search_memories
     from remagraph.store import process_store as _rg_process_store
     _DIRECT_IMPORT = True
@@ -306,6 +315,262 @@ def recall_memories(
         return data.get("memories", []) or []
     except Exception:  # noqa: BLE001  # same best-effort recall contract as the direct-import branch above (CLI failure, timeout, or malformed JSON all degrade to "no prior memories found").
         return []
+
+
+def _search_isolated_namespace(
+    query: str,
+    *,
+    top_k: int,
+    kind: str | None,
+    status: str | None,
+    tags: list[str] | None,
+    project_id: str,
+    agent_id: str | None,
+    task_id: str | None,
+    all_projects: bool,
+    cross_project_label: str | None,
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    """Search herdr-bridge's own `hb-live-` self-protected store (see
+    `_project_state_dir()`'s docstring) -- this is the *complete* result set
+    for anything herdr-bridge itself wrote (store_memory/record_fleet_member/
+    etc. only ever write here), but does NOT see messages an external tower
+    wrote via the standard convention -- see `_search_standard_namespace()`.
+    """
+    _enforce_remagraph_safety_valve(project_id)
+
+    if _DIRECT_IMPORT:
+        try:
+            conn = _rg_connect()
+            req = _RgSearchRequest(
+                query=query,
+                top_k=top_k,
+                kind=kind,
+                status=status,
+                tags=tags,
+                project_id=None if all_projects else project_id,
+                agent_id=agent_id,
+                task_id=task_id,
+                cross_project_label=cross_project_label,
+            )
+            resp = _rg_search_memories(conn, req)
+            try:
+                conn.close()
+            except Exception:  # best-effort cleanup of an external (remagraph-owned) connection object; failing to close must not fail the search itself.
+                logger.debug("failed to close remagraph connection after search", exc_info=True)
+            return list(getattr(resp, "results", None) or resp.get("results", []))
+        except Exception:  # noqa: BLE001  # search is a best-effort read: any backend/connection failure degrades to "no results found" rather than surfacing to the caller.
+            return []
+
+    # CLI fallback.
+    try:
+        cmd = ["remagraph", "search", "--query", query, "--top-k", str(top_k)]
+        if kind:
+            cmd += ["--kind", kind]
+        if status:
+            cmd += ["--status", status]
+        if tags:
+            cmd += ["--tags", json.dumps(tags)]
+        if all_projects:
+            cmd += ["--all-projects"]
+        else:
+            cmd += ["--project", project_id]
+        if agent_id:
+            cmd += ["--agent-id", agent_id]
+        if task_id:
+            cmd += ["--task-id", task_id]
+        if cross_project_label:
+            cmd += ["--cross-project-label", cross_project_label]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, env={**os.environ}, check=False)
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout or "{}")
+        return data.get("results", []) or []
+    except Exception:  # noqa: BLE001  # same best-effort search contract as the direct-import branch above (CLI failure, timeout, or malformed JSON all degrade to "no results found").
+        return []
+
+
+def _search_standard_namespace(
+    query: str,
+    *,
+    top_k: int,
+    kind: str | None,
+    status: str | None,
+    tags: list[str] | None,
+    project_id: str,
+    agent_id: str | None,
+    task_id: str | None,
+    all_projects: bool,
+    timeout_sec: int,
+) -> list[dict[str, Any]]:
+    """Best-effort read of the plain `remagraph-<project_id>` path (see
+    `standard_project_state_dir()`) -- where an external tower following
+    RemaGraph's own documented convention (with no knowledge of
+    herdr-bridge's `hb-live-` deviation) writes and reads. herdr-bridge never
+    writes here itself, so this is read-only, raw sqlite3 (no dependency on
+    the remagraph package's own connection/migration machinery -- the DB
+    already exists in whatever schema the external writer's remagraph
+    version created it with). Missing file / any read error degrades
+    silently to "no results from this namespace", exactly like the isolated
+    side's best-effort contract.
+    """
+    db_path = _standard_project_state_dir(project_id) / "remagraph.db"
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        where: list[str] = []
+        params: list[Any] = []
+        if not all_projects:
+            where.append("m.project_id = ?")
+            params.append(project_id)
+        if kind:
+            where.append("m.kind = ?")
+            params.append(kind)
+        if status:
+            where.append("m.status = ?")
+            params.append(status)
+        if agent_id:
+            where.append("m.agent_id = ?")
+            params.append(agent_id)
+        if task_id:
+            where.append("m.task_id = ?")
+            params.append(task_id)
+
+        # Same FTS5 trigram matching RemaGraph's own search_memories() uses --
+        # a plain LIKE substring match would miss any multi-word query
+        # (matching individual tokens, not the literal joined phrase).
+        sanitized = _rg_sanitize_fts5_query(query) if query.strip() else ""
+        has_fts5 = bool(sanitized) and len(sanitized.replace(" ", "")) >= 3
+        if has_fts5:
+            sql = (
+                "SELECT m.* FROM memories m "
+                "JOIN memories_fts f ON m.rowid = f.rowid "
+                "WHERE memories_fts MATCH ?"
+            )
+            params = [sanitized, *params]
+        else:
+            sql = "SELECT m.* FROM memories m"
+        if where:
+            sql += (" AND " if has_fts5 else " WHERE ") + " AND ".join(where)
+        sql += " ORDER BY m.timestamp DESC LIMIT ?"
+        params.append(top_k)
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        conn.close()
+        if tags:
+            def _row_has_any_tag(row: dict[str, Any]) -> bool:
+                try:
+                    row_tags = json.loads(row.get("tags") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    row_tags = []
+                return any(t in row_tags for t in tags)
+            rows = [r for r in rows if _row_has_any_tag(r)]
+        return rows
+    except Exception:  # noqa: BLE001  # read-only best-effort secondary source (see docstring); a missing/locked/malformed/schema-incompatible DB degrades to "no results from this namespace", not a search failure.
+        return []
+
+
+def search_memories(
+    query: str = "",
+    *,
+    top_k: int = 10,
+    kind: str | None = None,
+    status: str | None = None,
+    tags: list[str] | None = None,
+    project_id: str,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    all_projects: bool = False,
+    cross_project_label: str | None = None,
+    timeout_sec: int = 8,
+) -> list[dict[str, Any]]:
+    """General-purpose Herdr Bridge Memory search (the `search` counterpart to
+    store_memory()/recall_memories()): full-text + filtered lookup, so callers
+    don't need to know the underlying `remagraph search` CLI directly.
+
+    project_id still determines which memory store (state_dir) this connects
+    to -- all_projects only controls whether results are additionally
+    filtered down to that project_id within that store, or returned
+    unfiltered (matching the `remagraph search --all-projects` semantics:
+    "all projects sharing this store", not a global fan-out across every
+    store on disk -- use cross_project_label for that).
+
+    2026-08-01 (PPLX-consulted architecture decision, see
+    docs/decisions/hb-live-namespace-search-20260801.md): reads check BOTH
+    herdr-bridge's own `hb-live-` self-protected store AND the plain
+    `remagraph-<project_id>` path an external tower would use by default,
+    merge the results (deduped by id, each tagged with which namespace it
+    came from via `_namespace`), and return the newest `top_k` overall.
+    Writes (store_memory) deliberately do NOT change -- they stay isolated-
+    only, preserving the 2026-07-25 #66 self-protection against the rogue
+    external `remagraph serve` process. `cross_project_label` only applies to
+    the isolated side (it's a remagraph-native fan-out mechanism that
+    doesn't have a meaningful standard-namespace equivalent here).
+    """
+    if not is_remagraph_enabled():
+        return []
+
+    if not project_id or project_id in ("herdr", "default"):
+        raise HerdrMemoryError("project_id is a required field; the herdr-bridge context must not use 'default'.")
+
+    isolated = _search_isolated_namespace(
+        query, top_k=top_k, kind=kind, status=status, tags=tags, project_id=project_id,
+        agent_id=agent_id, task_id=task_id, all_projects=all_projects,
+        cross_project_label=cross_project_label, timeout_sec=timeout_sec,
+    )
+    for r in isolated:
+        r.setdefault("_namespace", "isolated")
+
+    standard = _search_standard_namespace(
+        query, top_k=top_k, kind=kind, status=status, tags=tags, project_id=project_id,
+        agent_id=agent_id, task_id=task_id, all_projects=all_projects, timeout_sec=timeout_sec,
+    )
+    for r in standard:
+        r.setdefault("_namespace", "standard")
+
+    # Dedup key must include the namespace: each namespace is a separate SQLite
+    # database with its own id sequence (RemaGraph's mem-YYYYMMDD-NNN scheme), so
+    # an isolated record and a standard record can share the exact same literal
+    # `id` string while being two entirely different records -- deduping on bare
+    # `id` alone would silently drop one of them as a "duplicate".
+    seen_ids: set[tuple[str, str]] = set()
+    merged: list[dict[str, Any]] = []
+    for r in isolated + standard:
+        rid = r.get("id")
+        key = (r.get("_namespace", ""), rid) if rid is not None else None
+        if key is not None and key in seen_ids:
+            continue
+        if key is not None:
+            seen_ids.add(key)
+        merged.append(r)
+
+    merged.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
+    return merged[:top_k]
+
+
+def link_project(from_project: str, to_project: str, relation: str) -> None:
+    """Declare a (from_project, to_project, relation) edge for
+    search_memories()'s underlying `include_related`/`related_hops`
+    traversal (the `remagraph link` counterpart), so callers don't need to
+    know the underlying `remagraph` CLI directly.
+
+    Uses a global, machine-wide project registry DB (not the per-project
+    hb-live-/standard namespaces search_memories() reads) -- declaring a
+    relation doesn't touch either project's own memory store.
+    """
+    if not is_remagraph_enabled():
+        return
+
+    if _DIRECT_IMPORT:
+        _rg_declare_project_edge(from_project, to_project, relation)
+        return
+
+    # CLI fallback.
+    subprocess.run(
+        ["remagraph", "link", "--from", from_project, "--to", to_project, "--relation", relation],
+        capture_output=True, text=True, timeout=8, env={**os.environ}, check=False,
+    )
 
 
 def format_memory_summary(memories: list[dict[str, Any]], max_items: int = 5) -> str:
@@ -1031,3 +1296,301 @@ def get_delivery_state(
     if row is None:
         return None
     return {"state": row["state"], "context": row.get("context"), "correlation": row.get("correlation")}
+
+
+# ---------------------------------------------------------------------------
+# Signal ACK state machine (design doc §3.1/§3.5/§3.7) — the single authority
+# for the Accepted -> Injected -> Seen -> Accepted-for-work -> Completed chain,
+# plus the escalation markers a sender's timers can raise
+# (daemon_unreachable/injection_unconfirmed/needs_attention).
+#
+# Write ownership (§3.7, enforced by convention — every write goes through
+# this module, callers never touch signal_state_store directly):
+#   - mark_accepted() / mark_escalated(): outbound.py only (the SENDING tower).
+#   - mark_injected(): daemon.py only (the RECEIVING tower's daemon).
+#   - mark_seen() / mark_accepted_for_work() / mark_completed(): the target
+#     agent's own conversation flow only (the RECEIVING tower's agent).
+# No two roles ever write the same state.
+# ---------------------------------------------------------------------------
+
+SIGNAL_STATES = [
+    "accepted", "injected", "seen", "accepted_for_work", "completed",
+    "daemon_unreachable", "injection_unconfirmed", "needs_attention",
+]
+
+# §3.1's async limit lives in this table: injection_unconfirmed/needs_attention
+# are escalation flags a sender's timer raised because it gave up waiting, not
+# hard terminal states — the underlying event (a late Injected/Seen) can still
+# arrive afterward, so both allow one legal transition back onto the main chain.
+#
+# None -> "injected" is also legal (not just None -> "accepted"): `accepted`
+# is written by outbound.py (the sender, after its own socket round trip) and
+# `injected` is written by daemon.py (the receiver, after its own notify-pane
+# call) — two independent processes racing to write the same row with no
+# ordering guarantee between them. Requiring `accepted` to land first would
+# make this a real, reproducible race (found by test_send_retries_before_
+# giving_up), not a hypothetical one: Accepted's own persistence is already
+# defined as lightweight/droppable (§3.1's table), so it was never meant to be
+# a hard prerequisite for anything else.
+SIGNAL_STATE_TRANSITIONS: dict[str | None, list[str]] = {
+    None: ["accepted", "daemon_unreachable", "injected"],
+    "accepted": ["injected", "injection_unconfirmed"],
+    # "completed" added 2026-08-01 (PPLX-reviewed fix for a real production
+    # bug, not a design preference): seen/accepted_for_work require an
+    # external actor -- the receiving agent's own conversation flow -- to
+    # call mark_seen()/mark_accepted_for_work() explicitly, and nothing in
+    # this codebase ever did. Every Signal sent was permanently stuck at
+    # "injected", which in turn made find_active_by_target() treat it as
+    # forever in-flight and silently swallow every subsequent send to the
+    # same (to_project, inbox_ref) -- exactly the reminder/retry scenario
+    # Signal exists for. daemon.py now calls mark_completed() itself right
+    # after mark_injected() succeeds (see daemon.py's write-ownership note);
+    # "completed" here means "the daemon confirmed injection, the sender's
+    # job is done" -- not "the receiving agent read and finished handling
+    # it". seen/needs_attention stay reserved for a future point where the
+    # receiving agent's own flow can genuinely drive them.
+    "injected": ["seen", "needs_attention", "completed"],
+    "seen": ["accepted_for_work"],
+    "accepted_for_work": ["completed"],
+    "completed": [],
+    "daemon_unreachable": [],
+    "injection_unconfirmed": ["injected"],
+    "needs_attention": ["seen"],
+}
+
+
+def _validate_signal_transition(current_state: str | None, new_state: str) -> None:
+    if new_state not in SIGNAL_STATES:
+        raise ValueError(f"Invalid Signal state: {new_state}. Must be one of {SIGNAL_STATES}")
+    if new_state == current_state:
+        return  # idempotent no-op write (e.g. a retried call), always legal
+    allowed = SIGNAL_STATE_TRANSITIONS.get(current_state, [])
+    if new_state not in allowed:
+        raise ValueError(
+            f"Invalid Signal transition: {current_state} -> {new_state}. Allowed: {allowed}"
+        )
+
+
+def _write_signal_state(
+    project_id: str, message_id: str, new_state: str, *,
+    from_project: str | None = None, to_project: str | None = None,
+    inbox_ref: str | None = None, attempt_count: int | None = None,
+    accepted_at: float | None = None, injected_at: float | None = None,
+    seen_at: float | None = None,
+) -> dict[str, Any]:
+    """Shared implementation for every mark_*() below: validate the transition
+    against the current recorded state, write, then self-verify by reading
+    back immediately (same discipline as update_delivery_state — see
+    DeliveryStateWriteFailed's docstring for why the read-back matters).
+    """
+    state_dir = _signal_state_dir(project_id)
+    current = _signal_store.read_state(state_dir, message_id)
+    _validate_signal_transition(current["state"] if current else None, new_state)
+
+    _signal_store.write_state(
+        state_dir, message_id,
+        from_project=from_project or (current["from_project"] if current else ""),
+        to_project=to_project or (current["to_project"] if current else ""),
+        inbox_ref=inbox_ref or (current["inbox_ref"] if current else ""),
+        state=new_state, attempt_count=attempt_count,
+        accepted_at=accepted_at, injected_at=injected_at, seen_at=seen_at,
+    )
+    verify_row = _signal_store.read_state(state_dir, message_id)
+    if not verify_row or verify_row.get("state") != new_state:
+        raise SignalStateWriteFailed(
+            f"Signal state write for message_id={message_id} -> {new_state!r} failed "
+            f"read-back verification: store returned {verify_row}."
+        )
+    return verify_row
+
+
+#: 2026-08-02 field incident fix (PPLX consensus): both mark_accepted() and
+#: mark_escalated() read `current` once to decide what to do, then
+#: _write_signal_state() reads it again to validate -- see their docstrings
+#: for the full race (same structural bug, two call sites: mark_accepted()'s
+#: own two-read gap, and mark_escalated()'s pre-check-vs-write gap). Bounded
+#: local retry against the freshest state on each attempt; not a
+#: general-purpose escape hatch (kept local to these two functions, not
+#: pushed down into _write_signal_state() itself -- mark_injected()/
+#: mark_completed()/etc. must keep raising on a genuinely illegal transition).
+_SIGNAL_WRITE_RACE_RETRY_ATTEMPTS = 3
+
+
+def mark_accepted(
+    project_id: str, message_id: str, *, from_project: str, to_project: str, inbox_ref: str
+) -> dict[str, Any]:
+    """outbound.py only: record that the daemon's socket-level Accepted ACK arrived.
+
+    Race note: daemon.py (a different process) can independently reach
+    `injected` before this call lands — there's no ordering guarantee between
+    "sender records Accepted" and "receiver finishes injecting" (see
+    SIGNAL_STATE_TRANSITIONS's docstring). When that happens this call must
+    backfill `accepted_at` without regressing `state` back to "accepted" —
+    losing the already-recorded `injected` (or later) state would be worse
+    than the metadata staying momentarily incomplete.
+
+    2026-08-02 field incident (a real downstream deployment repro'd this twice,
+    root-fix request): the race note above describes the *intended* handling, but the
+    original implementation had a second, narrower TOCTOU gap of its own —
+    this function read `current` ONCE to decide `target_state`, then called
+    `_write_signal_state()`, which independently re-reads `current` a SECOND
+    time to validate the transition. If the daemon advanced the row (e.g. all
+    the way to "completed") in the gap between these two reads, the
+    `target_state` computed here goes stale: `_write_signal_state()` validates
+    it against the FRESH state it just read, and a transition like
+    "completed" -> "accepted" is illegal (completed's allowed transitions are
+    empty) — raising ValueError uncaught, crashing the caller's whole `signal
+    send` CLI process even though the send had already succeeded. PPLX
+    consensus (2026-08-02): retry locally here, bounded, against the freshest
+    state each time — do NOT make this a general-purpose escape hatch in
+    `_write_signal_state()` itself, since other callers (mark_injected(),
+    mark_completed(), ...) must keep raising on a genuinely illegal
+    transition, not silently swallow it.
+    """
+    state_dir = _signal_state_dir(project_id)
+    last_error: ValueError | None = None
+    for _ in range(_SIGNAL_WRITE_RACE_RETRY_ATTEMPTS):
+        current = _signal_store.read_state(state_dir, message_id)
+        # Anything already recorded beyond the initial "accepted" step
+        # (injected, seen, ..., or even a terminal daemon_unreachable) must
+        # not be regressed back to "accepted" — this call only backfills
+        # accepted_at in that case.
+        target_state = "accepted"
+        if current is not None and current["state"] != "accepted":
+            target_state = current["state"]
+        try:
+            return _write_signal_state(
+                project_id, message_id, target_state,
+                from_project=from_project, to_project=to_project, inbox_ref=inbox_ref,
+                accepted_at=time.time(),
+            )
+        except ValueError as exc:
+            # The daemon raced ahead between our read above and
+            # _write_signal_state()'s own internal re-read — retry against
+            # whatever the state actually is now.
+            last_error = exc
+            continue
+    assert last_error is not None
+    raise last_error
+
+
+def mark_injected(project_id: str, message_id: str) -> dict[str, Any]:
+    """daemon.py only: record that notify-pane self-injection completed and was
+    confirmed delivered (§3.1's `Injected` state). This is the ONLY Signal state
+    daemon.py may write — see this section's write-ownership note.
+    """
+    return _write_signal_state(project_id, message_id, "injected", injected_at=time.time())
+
+
+def mark_escalated(project_id: str, message_id: str, reason: str, **kwargs: Any) -> dict[str, Any]:
+    """outbound.py only: record that one of §3.5's timers fired without seeing the
+    next expected ACK. `reason` must be one of "daemon_unreachable" /
+    "injection_unconfirmed" / "needs_attention" (§3.5 rules 1-2/3/4 respectively).
+
+    Race note (mirrors mark_accepted's, 2026-08-02 field incident): daemon.py
+    can independently finish injecting -- and, since 2026-08-01, immediately
+    completing right after -- between outbound.py's own wait loop timing out
+    and this call landing here. When that has already happened, the
+    escalation this call is about to record is stale: the send actually
+    succeeded. Regressing the already-recorded, better state (or raising --
+    which is what used to happen, crashing the caller's whole CLI process for
+    multiple downstream deployments and blocking every Signal send to
+    herdr-bridge) is worse than a no-op that returns the current state as-is.
+
+    2026-08-02 field incident, take two (the ACTUAL reported bug,
+    repro'd twice in the field: "Invalid Signal transition: completed ->
+    injection_unconfirmed. Allowed: []", exit 1, yet `signal status` showed
+    the envelope already state=completed): the pre-check above only closes
+    the WIDE version of this race, where the daemon had already reached its
+    terminal state by the time THIS function's own read of `current` landed
+    -- that case correctly no-ops without ever calling _write_signal_state().
+    It did not close the NARROW version: if this function's read lands before
+    the daemon finishes (sees e.g. "accepted", where `reason` is still a
+    legal transition and the pre-check does not short-circuit),
+    _write_signal_state() proceeds and performs its OWN internal re-read to
+    validate -- if the daemon finishes in the gap between those two reads,
+    that second read sees the real terminal state and the validation raises
+    uncaught. Same structural bug as mark_accepted()'s TOCTOU gap, same
+    PPLX-consensus fix: loop the whole pre-check-then-write attempt, bounded,
+    re-running the no-op check against the freshest state each time rather
+    than blindly retrying just the write.
+    """
+    if reason not in ("daemon_unreachable", "injection_unconfirmed", "needs_attention"):
+        raise ValueError(
+            f"mark_escalated reason must be daemon_unreachable/injection_unconfirmed/"
+            f"needs_attention, got {reason!r}"
+        )
+    state_dir = _signal_state_dir(project_id)
+    last_error: ValueError | None = None
+    for _ in range(_SIGNAL_WRITE_RACE_RETRY_ATTEMPTS):
+        current = _signal_store.read_state(state_dir, message_id)
+        if current is not None and current["state"] != reason:
+            allowed = SIGNAL_STATE_TRANSITIONS.get(current["state"], [])
+            if reason not in allowed:
+                return current
+        try:
+            return _write_signal_state(project_id, message_id, reason, **kwargs)
+        except ValueError as exc:
+            # The daemon raced ahead between our pre-check read above and
+            # _write_signal_state()'s own internal re-read — loop back and
+            # re-run the whole no-op-or-write decision against the state as
+            # it actually is now.
+            last_error = exc
+            continue
+    assert last_error is not None
+    raise last_error
+
+
+def mark_seen(project_id: str, message_id: str) -> dict[str, Any]:
+    """Reserved for future use (2026-08-01): intended for the target agent's
+    own conversation flow to self-attest that it has seen the wake
+    notification, but nothing in this codebase calls this today -- there is
+    no CLI command or hook wiring it up. `daemon.py` calls `mark_completed()`
+    directly after `mark_injected()` instead (see that function's docstring),
+    so a Signal's ACK chain never actually passes through "seen" in practice.
+    Kept as a real, working transition (`injected -> seen` is still legal)
+    for whoever eventually gives the receiving agent's flow a way to call it.
+    """
+    return _write_signal_state(project_id, message_id, "seen", seen_at=time.time())
+
+
+def mark_accepted_for_work(project_id: str, message_id: str) -> dict[str, Any]:
+    """Reserved for future use — see `mark_seen()`'s docstring. Nothing calls
+    this today."""
+    return _write_signal_state(project_id, message_id, "accepted_for_work")
+
+
+def mark_completed(project_id: str, message_id: str) -> dict[str, Any]:
+    """Called by `daemon.py` immediately after `mark_injected()` succeeds
+    (2026-08-01 fix — see `SIGNAL_STATE_TRANSITIONS`'s docstring for why).
+    Also legal from "accepted_for_work" for the reserved future flow where
+    the receiving agent drives its own seen/accepted_for_work/completed
+    transitions. Either way this means "the daemon's or the agent's
+    responsibility for this wake is done" -- it does not by itself prove a
+    human or agent actually read and acted on it.
+    """
+    return _write_signal_state(project_id, message_id, "completed")
+
+
+def get_signal_state(project_id: str, message_id: str) -> dict[str, Any] | None:
+    """Read the current Signal ACK state for `message_id`; None if not found."""
+    return _signal_store.read_state(_signal_state_dir(project_id), message_id)
+
+
+def list_recent_signal_states(project_id: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Most-recently-updated Signal ACK records for this project — backs
+    `herdr-commander signal status`."""
+    return _signal_store.list_recent(_signal_state_dir(project_id), limit)
+
+
+def find_active_signal_by_target(
+    project_id: str, to_project: str, inbox_ref: str, *, exclude_message_id: str | None = None
+) -> dict[str, Any] | None:
+    """§3.3's idempotency_key, looked up by its underlying (to_project,
+    inbox_ref) identity — daemon.py's dedup check (§3.8 acceptance test 5)
+    and outbound.py's caller-facing status split both use this; see
+    `signal_state_store.find_active_by_target`'s docstring for why
+    `exclude_message_id` matters for the outbound.py case."""
+    return _signal_store.find_active_by_target(
+        _signal_state_dir(project_id), to_project, inbox_ref, exclude_message_id=exclude_message_id
+    )

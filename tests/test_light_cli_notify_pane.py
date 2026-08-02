@@ -397,7 +397,7 @@ def test_notify_pane_ready_check_ignores_keywords_in_scrollback_history(monkeypa
     last few lines of the screen. If the agent's conversation history (already
     scrolled above the visible area) happens to mention "password"/"(y/n)"/
     "enter to confirm"/"trust this folder" -- for example while discussing
-    these keywords themselves (common during dogfooding: dispatch messages and
+    these keywords themselves (common in real usage: dispatch messages and
     replies frequently mention trust dialogs/y-n prompts/password input) --
     the ready check would misjudge the pane as being in a non-injectable
     state and reject an otherwise legitimate injection.
