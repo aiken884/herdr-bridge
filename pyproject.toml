@@ -20,7 +20,7 @@ dependencies = [
     # search_memories / models), not just the CLI fallback. RemaGraph owns the
     # core memory engine; herdr-bridge owns orchestration + ACP + light UX.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
-    "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
+    "remagraph>=0.4.0,<0.6",  # compatible-release band, matching the convention below
     # ACP SDK: a core dependency, not optional — the fleet's goal is fully
     # headless operation, and this path (dispatching to freshly-spawned headless
     # agent processes) is a real capability that goal requires. The package
