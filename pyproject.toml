@@ -25,8 +25,7 @@ dependencies = [
     # whole git-dependency saga (git+ssh -> git+https -> waiting on the repo to go
     # public -> --no-sources workaround for the local editable override leaking into
     # CI): a published package resolves the same way everywhere, no special CI
-    # handling needed for this dependency itself. `[tool.uv.sources]` below still
-    # overrides this with a local editable path for day-to-day development.
+    # handling needed for this dependency itself.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
     "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
     # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
@@ -42,22 +41,6 @@ dependencies = [
     "agent-client-protocol>=0.10.0,<0.12",
 ]
 
-[tool.uv.sources]
-# Embed RemaGraph for local development (governance layer only): takes precedence
-# over the PyPI version constraint above during a local `uv sync`. After `uv sync`,
-# `import remagraph` works directly (editable mode so changes show up immediately).
-#
-# 2026-07-31 hard-won lesson: this override applies unconditionally, in CI too, not
-# just locally — `uv sync --dev` in CI would try to resolve the adjacent ../RemaGraph
-# directory, which only exists on the maintainer's machine, and fail. Moving this
-# into an untracked uv.toml isn't possible either: uv explicitly rejects a `sources`
-# field there, it's only allowed in pyproject.toml. The correct approach: keep
-# running plain `uv sync --dev` locally (which applies this override); CI uses
-# `uv sync --dev --no-sources` (and every subsequent `uv run`/`uv build` call also
-# needs the flag — see .github/workflows/*.yml) so it resolves the normal PyPI
-# package instead.
-remagraph = { path = "../RemaGraph", editable = true }
-
 [project.scripts]
 herdr-commander = "herdr_bridge.light.cli:main"
 
@@ -66,7 +49,6 @@ Homepage = "https://github.com/aiken884/herdr-bridge"
 Source = "https://github.com/aiken884/herdr-bridge"
 "Bug Tracker" = "https://github.com/aiken884/herdr-bridge/issues"
 Changelog = "https://github.com/aiken884/herdr-bridge/blob/main/CHANGELOG.md"
-
 
 [dependency-groups]
 dev = [
