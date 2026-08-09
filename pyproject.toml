@@ -38,7 +38,7 @@ dependencies = [
     # not a persistent bug — see the update in section 7 of
     # docs/decisions/acp-layer-status-20260725.md). The package itself is very
     # lightweight (pure Python, a 6-package dependency tree, negligible install time).
-    "agent-client-protocol>=0.10.0,<0.12",
+    "agent-client-protocol>=0.10.0,<0.13",
 ]
 
 [project.scripts]
