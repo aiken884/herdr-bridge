@@ -14,4 +14,7 @@ class OpenCodeLeaderAdapter(LeaderHarnessAdapter):
     def register(self, policy_path: str, audit_sink: Any, herdr_bridge_root: str) -> HarnessResult:
         return HarnessResult(status=HarnessStatus.ACTIVE, brand=self.brand, adapter=self,
                              degraded=None,
-                             detail="[LEADER-HARNESS] OpenCode tool.execute.before 已註冊（plugin 路徑）")
+                             detail="[LEADER-HARNESS] opencode tool.execute.before 已註冊"
+                                    "（plugin：.opencode/plugins/leader-harness.js，"
+                                    "拒絕訊息可見性為 best-effort——throw Error 是否被 "
+                                    "LLM 讀到官方未保證）")

@@ -61,3 +61,51 @@ def test_unrelated_downstream_path_still_denied_by_default():
     r = evaluate("Edit", "/workspace/payments-service/router.py", ROOT)
     assert r["decision"] == "deny"
     assert r["rule_id"] == "deny-downstream-edit"
+
+
+def test_allow_codex_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    codex_path = str(tmp_path / ".codex" / "sessions" / "foo.jsonl")
+    result = evaluate("Write", codex_path, root)
+    assert result["decision"] == "allow"
+
+
+def test_allow_gemini_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    gemini_path = str(tmp_path / ".gemini" / "tmp" / "abc123" / "chats" / "1.json")
+    result = evaluate("Write", gemini_path, root)
+    assert result["decision"] == "allow"
+
+
+def test_allow_opencode_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    opencode_path = str(tmp_path / ".local" / "share" / "opencode" / "project" / "x.json")
+    result = evaluate("Write", opencode_path, root)
+    assert result["decision"] == "allow"
+
+
+def test_allow_copilot_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    copilot_path = str(tmp_path / ".copilot" / "settings.json")
+    result = evaluate("Write", copilot_path, root)
+    assert result["decision"] == "allow"
+
+
+def test_allow_grok_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    grok_path = str(tmp_path / ".grok" / "hooks" / "leader-harness.json")
+    result = evaluate("Write", grok_path, root)
+    assert result["decision"] == "allow"
+
+
+def test_allow_warp_native_infra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = str(tmp_path / "herdr-bridge")
+    warp_path = str(tmp_path / ".warp" / "settings.json")
+    result = evaluate("Write", warp_path, root)
+    assert result["decision"] == "allow"

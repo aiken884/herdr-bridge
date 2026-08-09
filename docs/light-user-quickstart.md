@@ -78,6 +78,20 @@ Just run `herdr-commander run`, and herdr-commander will:
 
 ---
 
+## Enabling Command Tower Leader (optional)
+
+If you're using Claude Code as your command tower, `git clone` this repo, run `uv sync --dev`,
+then open the folder in Claude Code — that's it. `.claude/settings.json` and `.claude/hooks/`
+ship with the repo and auto-detect the current project path; no manual configuration needed.
+
+**If an Edit/Write gets rejected**: Command Tower Leader restricts Claude Code to editing files
+within the herdr-bridge project itself. Trying to edit a file outside that scope is denied, with
+a clear reason shown in the conversation (e.g. `HARNESS-DOWNSTREAM-BLOCK` or
+`HARNESS-ENV-ERROR`). This is by design — it stops the tower from doing work that should be
+delegated to a fleet member instead.
+
+---
+
 ## When something goes wrong
 
 | Situation | What to do |
@@ -370,6 +384,19 @@ herdr-commander router list                      # 查看 4 agents + 動態 regi
 2. 把任務說清楚並派出去
 3. 等它做完
 4. 用你聽得懂的話回報結果
+
+---
+
+## 啟用 Command Tower Leader（選用）
+
+如果你用 Claude Code 當指揮塔，`git clone` 這個 repo、跑 `uv sync --dev`，然後用 Claude Code
+開啟這個資料夾就好——不需要手動修改任何設定。`.claude/settings.json` 跟 `.claude/hooks/` 已經
+隨 repo 附帶，會自動偵測目前的專案路徑。
+
+**如果 Edit/Write 被拒絕**：Command Tower Leader 啟用後，Claude Code 只能修改 herdr-bridge
+自己專案範圍內的檔案；嘗試編輯範圍外的檔案會被拒絕，並在對話裡顯示明確的拒絕原因（例如
+`HARNESS-DOWNSTREAM-BLOCK` 或 `HARNESS-ENV-ERROR`）。這是設計行為，用來防止指揮塔自己動手
+做該交給艦隊成員的工作。
 
 ---
 

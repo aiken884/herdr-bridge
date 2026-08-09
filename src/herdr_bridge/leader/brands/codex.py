@@ -16,8 +16,9 @@ class CodexLeaderAdapter(LeaderHarnessAdapter):
         return HarnessResult(
             status=HarnessStatus.ACTIVE, brand=self.brand, adapter=self, degraded=None,
             detail=(
-                "[LEADER-HARNESS] Codex PreToolUse 已註冊，覆蓋範圍僅 Bash；"
-                "file-write 類操作（Edit/Write）無技術攔截，僅靠章程小抄自律補償——"
-                "第二級防線，非等同 Claude Code 的技術強制（M3）"
+                "[LEADER-HARNESS] Codex PreToolUse 已註冊（設定檔：.codex/hooks.json），"
+                "覆蓋範圍僅 Bash 高風險樣式偵測；file-write 類操作（apply_patch/Edit/Write）"
+                "無技術攔截，僅靠章程小抄自律 + 建議使用者搭配 Codex 原生 approval_policy "
+                "（workspace-write 等）補償——第二級防線，非等同 Claude Code 的技術強制（M3）"
             ),
         )

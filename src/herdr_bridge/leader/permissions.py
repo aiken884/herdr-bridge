@@ -18,7 +18,17 @@ _WRITE_TOOLS = {"Edit", "Write", "MultiEdit"}
 # 路徑樣板中的 {HOME} 於 evaluate() 呼叫當下才展開（不可在 import 時就快取展開結果
 # ——HOME 在測試環境或不同執行環境下可能與 import 當時不同，快取會鎖死成錯誤值）。
 _TUI_NATIVE_INFRA_PATTERNS: list[str] = [
-    "{HOME}/.claude/projects/**",  # Claude Code：session 記憶/專案中繼資料
+    "{HOME}/.claude/projects/**",       # Claude Code：session 記憶/專案中繼資料
+    "{HOME}/.codex/**",                 # Codex CLI：設定/認證/session/hooks
+    "{HOME}/.gemini/**",                # Gemini CLI：設定/session/暫存
+    "{HOME}/.copilot/**",               # GitHub Copilot CLI：使用者層級設定/hooks
+    "{HOME}/.config/opencode/**",       # opencode：XDG 設定目錄
+    "{HOME}/.local/share/opencode/**",  # opencode：session/認證（XDG data 目錄）
+    "{HOME}/.local/state/opencode/**",  # opencode：log/TUI state（XDG state 目錄）
+    "{HOME}/.grok/**",                  # Grok CLI：hooks/trusted_folders.toml/設定
+    "{HOME}/.warp/**",                  # Warp：慣例路徑，官方文件未逐一列出檔案清單，
+                                         # 目前 Warp 無可程式化 hook 機制不會觸發 evaluate()，
+                                         # 這筆是防禦性放行，避免未來若 Warp 支援 hook 時漏放
 ]
 
 _RULES: list[dict[str, Any]] = [

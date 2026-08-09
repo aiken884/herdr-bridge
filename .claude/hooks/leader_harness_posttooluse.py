@@ -3,8 +3,7 @@
 import json
 import sys
 
-sys.path.insert(0, "src")
-from herdr_bridge.leader.brands.claude import cross_check_and_compensate  # noqa: E402
+from herdr_bridge.leader.brands.claude import cross_check_and_compensate
 
 if __name__ == "__main__":
     event = json.load(sys.stdin)

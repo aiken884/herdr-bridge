@@ -153,6 +153,26 @@ Because of this, `wait_until` never trusts a status event by itself: on every `p
 - **`AgentInfo.status` is eventually consistent**, backed by a local cache that reconciles a full snapshot every 5 minutes as an upper bound on drift; it is not a live-push guarantee for every intermediate transition.
 - **herdr had a confirmed upstream restore bug (observed on 0.7.4)**: after a Herdr session server restart, panes/agents restored from `session.snapshot` show up in listings, but reading them (`agent.read`/`pane.read`) fails with `agent_not_found`/`pane_not_found`. herdr-bridge cannot work around this at the client level — it raises `AgentNotFoundError` as designed, for your own degradation path to handle. Newly created panes after the restart are unaffected. **Update (2026-08-02)**: a third party independently filed and fixed this upstream ([herdrdev/herdr#2065](https://github.com/herdrdev/herdr/issues/2065), fix merged in [#2088](https://github.com/herdrdev/herdr/pull/2088) on 2026-07-30), but as of the latest tagged release (0.7.5, 2026-07-21) and the latest preview build (2026-07-29) — both predating the merge — the fix has not shipped yet. Keep treating this as a live limitation until a newer release confirms the fix.
 
+## Leader Harness brand compatibility
+
+Leader Harness (part of Command Tower Leader) intercepts and denies the tower's own attempts to
+edit files outside its own project scope. Real, committed hook configuration — not just a status
+claim — ships for these brands:
+
+| Brand | File-write interception | Config path | Notes |
+|---|---|---|---|
+| Claude Code | Full (all tools) | `.claude/settings.json` + `.claude/hooks/` | First-class support; deny-reliability gated on upstream fix status (see caveat below) |
+| GitHub Copilot CLI | Full (all tools) | `.github/hooks/` | |
+| Gemini CLI | Full (all tools) | `.gemini/` | |
+| opencode | Full (all tools) | `.opencode/plugins/` | Deny visibility is best-effort — `throw Error` reaching the LLM isn't guaranteed by the platform |
+| Grok CLI | Full (all tools) | `.grok/hooks/` | Requires trusting this folder in `~/.grok/trusted_folders.toml` first (a global, user-owned file herdr-bridge does not modify) |
+| Codex CLI | Bash-only | `.codex/hooks.json` | File-write (`apply_patch`/`Edit`/`Write`) has no technical interception yet — pair with Codex's own `approval_policy` |
+| Warp Agents CLI | None | — | Confirmed no programmable interception hook exists (permissions are an in-app UI, not an external policy API) |
+
+Every brand above resolves its own project-root variable rather than a hardcoded path (Claude
+Code's `$CLAUDE_PROJECT_DIR`, Gemini's `$GEMINI_PROJECT_DIR`, Grok's `$GROK_WORKSPACE_ROOT`,
+etc.), so cloning this repo anywhere works without editing any config.
+
 ## Reserved fields
 
 Every call takes an `actor_id`; `send_to_agent` takes a `priority`; `acquire_control` takes a `mode`. herdr-bridge does not enforce, rank, or gate anything based on these today — it only records them (plus an `actor_id_status` audit grade for malformed values). They exist so a future governance layer — a rule engine, priority scheduler, or multi-caller policy — can be built without changing these frozen signatures. Full format, value ranges, and named anchors: [`docs/api.md`](docs/api.md).

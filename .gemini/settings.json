@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "name": "herdr-bridge-leader-harness",
+        "type": "command",
+        "command": "HERDR_BRIDGE_ROOT=\"${GEMINI_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}\" python3 \"${GEMINI_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}/.gemini/hooks/leader_harness_pretooluse.py\"",
+        "matcher": "write_file|replace",
+        "timeout": 10000
+      }
+    ]
+  }
+}

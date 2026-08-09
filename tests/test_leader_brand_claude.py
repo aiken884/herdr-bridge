@@ -7,6 +7,9 @@ def test_deny_hook_exits_zero_with_json_stdout(tmp_path, monkeypatch):
     """R-6 最終定案：deny 必須是 exit code 0 + stdout JSON，不是 exit code 2。"""
     root = tmp_path / "herdr-bridge"
     root.mkdir()
+    (root / ".herdr").mkdir()
+    (root / ".claude").mkdir()
+    (root / ".claude" / "settings.json").write_text("{}")
     downstream = tmp_path / "other-service" / "router.py"
     downstream.parent.mkdir()
     downstream.write_text("original")
@@ -27,6 +30,9 @@ def test_deny_hook_exits_zero_with_json_stdout(tmp_path, monkeypatch):
 def test_allow_own_repo_hook_exits_zero_no_deny(tmp_path):
     root = tmp_path / "herdr-bridge"
     root.mkdir()
+    (root / ".herdr").mkdir()
+    (root / ".claude").mkdir()
+    (root / ".claude" / "settings.json").write_text("{}")
     own_file = root / "src" / "foo.py"
     own_file.parent.mkdir(parents=True)
     own_file.write_text("x")

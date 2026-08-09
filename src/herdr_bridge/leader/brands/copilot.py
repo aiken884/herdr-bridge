@@ -13,4 +13,6 @@ class CopilotLeaderAdapter(LeaderHarnessAdapter):
 
     def register(self, policy_path: str, audit_sink: Any, herdr_bridge_root: str) -> HarnessResult:
         return HarnessResult(status=HarnessStatus.ACTIVE, brand=self.brand, adapter=self,
-                             degraded=None, detail="[LEADER-HARNESS] Copilot preToolUse 已註冊（全工具覆蓋）")
+                             degraded=None,
+                             detail="[LEADER-HARNESS] Copilot preToolUse 已註冊（全工具覆蓋，"
+                                    "設定檔：.github/hooks/leader_harness.json）")

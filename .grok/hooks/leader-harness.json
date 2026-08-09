@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HERDR_BRIDGE_ROOT=\"$GROK_WORKSPACE_ROOT\" python3 \"$GROK_WORKSPACE_ROOT/.grok/hooks/leader_harness_pretooluse.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

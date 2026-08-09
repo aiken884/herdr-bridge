@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-09 — Leader Harness: real multi-brand hook wiring
+
+### Added
+- Leader Harness now ships real, committed hook configuration for GitHub Copilot CLI
+  (`.github/hooks/`), Gemini CLI (`.gemini/`), opencode (`.opencode/plugins/`), Codex CLI
+  (`.codex/hooks/`, Bash-only coverage), and Grok CLI (`.grok/hooks/`) — previously only Claude
+  Code had working hook wiring despite every brand adapter reporting `ACTIVE` status. Grok was
+  additionally re-classified from "unsupported" to `ACTIVE`: the original classification never
+  actually found official documentation and defaulted to unsupported rather than confirming it;
+  a fresh check found Grok's official hooks docs (schema close to Claude Code's own).
+- `register_leader_harness()` is now actually invoked at `SessionStart`, with results surfaced
+  via `.herdr/harness_status.json` (8-hour staleness window) and the audit log — previously dead
+  code, never called from any real entry point.
+- Optional charter document injection (`HERDR_TOWER_PROMPT`/`HERDR_ORG_ROOT`) for deployments
+  that use one; fully opt-in, silent no-op when unset so a plain `git clone` + `uv sync --dev`
+  never breaks on a missing file.
+- `.claude/settings.json`'s hook commands now resolve `$CLAUDE_PROJECT_DIR` instead of a
+  hardcoded absolute path, use `uv run` instead of assuming `.venv/bin/python3` exists, and
+  `leader_harness_pretooluse.py` verifies `HERDR_BRIDGE_ROOT` actually points at a valid
+  herdr-bridge checkout (`.herdr/` + `.claude/settings.json` present) before trusting it,
+  fail-closed otherwise.
+
+### Fixed
+- `_TUI_NATIVE_INFRA_PATTERNS` only allowlisted Claude Code's own native paths — Leader Harness
+  would have incorrectly denied Codex/Gemini/Copilot/opencode/Grok's own session/config writes.
+  Warp's native path is now allowlisted defensively too, even though it has no hook mechanism to
+  trigger this check today.
+
 ## [0.9.0] — 2026-08-09 — Command Tower Leader: multi-brand fleet orchestration
 
 ### Added

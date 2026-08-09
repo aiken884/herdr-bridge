@@ -13,4 +13,6 @@ class GeminiLeaderAdapter(LeaderHarnessAdapter):
 
     def register(self, policy_path: str, audit_sink: Any, herdr_bridge_root: str) -> HarnessResult:
         return HarnessResult(status=HarnessStatus.ACTIVE, brand=self.brand, adapter=self,
-                             degraded=None, detail="[LEADER-HARNESS] Gemini BeforeTool 已註冊（全工具覆蓋）")
+                             degraded=None,
+                             detail="[LEADER-HARNESS] Gemini BeforeTool 已註冊（全工具覆蓋，"
+                                    "設定檔：.gemini/settings.json）")

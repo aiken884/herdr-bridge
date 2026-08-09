@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": ".github/hooks/scripts/leader_harness_pretooluse.py",
+        "powershell": ".github/hooks/scripts/leader_harness_pretooluse.ps1",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

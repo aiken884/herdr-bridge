@@ -23,10 +23,13 @@ def test_codex_adapter_reports_bash_only_coverage():
     assert "Bash" in result.detail or "bash" in result.detail.lower()
 
 
-def test_grok_adapter_degrades_probe_false():
+def test_grok_adapter_registers_active():
+    """2026-08-09 更正：先前規格判斷 Grok 不支援 hook 已過時，重新查證後官方確認
+    Grok CLI 支援 PreToolUse hook，改列為 ACTIVE（見 herdr_bridge/leader/brands/grok.py
+    docstring）。"""
     from herdr_bridge.leader.brands.grok import GrokLeaderAdapter
     adapter = GrokLeaderAdapter()
-    assert adapter.probe() is False
+    assert adapter.probe() is True
     result = adapter.register("/tmp/perms.json", None, "/tmp/root")
-    assert result.status.value == "degraded"
-    assert result.degraded.fallback_layers == ["layer_b_charter", "audit_frequency_2x"]
+    assert result.status.value == "active"
+    assert result.degraded is None

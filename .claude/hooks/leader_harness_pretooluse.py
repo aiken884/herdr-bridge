@@ -10,8 +10,6 @@ import json
 import os
 import sys
 
-sys.path.insert(0, "src")
-
 
 def main() -> None:
     event = json.load(sys.stdin)
@@ -22,8 +20,13 @@ def main() -> None:
         sys.exit(0)
 
     herdr_bridge_root = os.environ.get("HERDR_BRIDGE_ROOT")
-    if not herdr_bridge_root:
-        _emit_deny("HARNESS-ENV-ERROR: HERDR_BRIDGE_ROOT 未設定，拒絕所有 Edit/Write。")
+    if not herdr_bridge_root or not _is_valid_bridge_root(herdr_bridge_root):
+        _emit_deny(
+            "HARNESS-ENV-ERROR: HERDR_BRIDGE_ROOT 未設定或未指向有效的 herdr-bridge "
+            "專案根目錄（需含 .herdr/ 與 .claude/settings.json），拒絕所有 Edit/Write。"
+            "請確認從 herdr-bridge 專案根目錄啟動 Claude Code。",
+            herdr_bridge_root,
+        )
         return
 
     from herdr_bridge.leader.permissions import evaluate
@@ -31,15 +34,32 @@ def main() -> None:
 
     if rule["decision"] == "deny":
         reason = rule.get("reason") or f"[rule: {rule['rule_id']}] 此操作被 Leader Harness 拒絕"
-        _emit_deny(reason)
+        _emit_deny(reason, herdr_bridge_root)
     else:
         sys.exit(0)
 
 
-def _emit_deny(reason: str) -> None:
+def _is_valid_bridge_root(root: str) -> bool:
+    from pathlib import Path
+    base = Path(root)
+    return (base / ".herdr").is_dir() and (base / ".claude" / "settings.json").is_file()
+
+
+def _is_harness_degraded(herdr_bridge_root: str | None) -> bool:
+    if not herdr_bridge_root:
+        return False
+    from pathlib import Path
+
+    from herdr_bridge.leader.status_cache import read_harness_status
+    status = read_harness_status(Path(herdr_bridge_root) / ".herdr" / "harness_status.json")
+    return bool(status and status.get("status") == "degraded")
+
+
+def _emit_deny(reason: str, herdr_bridge_root: str | None = None) -> None:
     from herdr_bridge.audit import AuditLogger
     AuditLogger().record("system:bridge", "pre_tool_use", layer="harness",
-                         decision="deny", reason=reason)
+                         decision="deny", reason=reason,
+                         harness_degraded=_is_harness_degraded(herdr_bridge_root))
 
     output = {
         "hookSpecificOutput": {
