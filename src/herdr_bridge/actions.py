@@ -31,7 +31,7 @@ from herdr_bridge.models import (
     SendResult,
     WaitResult,
 )
-from herdr_bridge.schema import check_server_compat
+from herdr_bridge.schema import PROTOCOL_AGENT_TARGET_REGRESSION, check_server_compat
 
 logger = logging.getLogger("herdr_bridge.actions")
 
@@ -132,6 +132,12 @@ class BridgeActions:
         # directly must not falsely claim "explicit".
         self._resolved_socket_path = client.socket_path
         self._socket_source = "unknown"
+        # Set by the connect() factory from check_server_compat()'s ping(); an
+        # instance built directly (not via connect()) doesn't know its server's
+        # protocol, so the protocol-19 agent.read/agent.send workaround below
+        # stays off (falls through to unconditional pre-0.8.0 behavior) rather
+        # than guessing.
+        self._protocol: int | None = None
 
     @property
     def resolved_socket_path(self) -> str:
@@ -161,6 +167,20 @@ class BridgeActions:
             info = self._cache.resolve(target)
         return info
 
+    def _agent_target(self, info: AgentInfo) -> str:
+        """The `target` value to actually put on the wire for agent.read/agent.send.
+
+        Normally this is just info.agent_id (the terminal_id) -- the documented,
+        frozen public semantics. On protocol 19 specifically (schema.py's
+        PROTOCOL_AGENT_TARGET_REGRESSION), the server rejects terminal_id targets
+        with agent_not_found; pane_id works. AgentInfo.agent_id itself is left
+        untouched either way, so callers who stored/compared that value see no
+        change.
+        """
+        if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION:
+            return info.pane_id
+        return info.agent_id
+
     def _resolve_or_raise(self, agent_id: str) -> AgentInfo:
         info = self._resolve_with_refresh(agent_id)
         if info is None:
@@ -184,7 +204,7 @@ class BridgeActions:
                 f"unknown mode {mode!r}; expected one of {sorted(_MODE_MAP)}") from None
         info = self._resolve_or_raise(agent_id)
         params: dict[str, Any] = {
-            "target": info.agent_id, "source": source,
+            "target": self._agent_target(info), "source": source,
             "format": fmt, "strip_ansi": strip,
         }
         if since_revision is not None:
@@ -202,7 +222,12 @@ class BridgeActions:
     def send_to_agent(self, actor_id: str, agent_id: str, text: str,
                       priority: int = 0) -> SendResult:
         info = self._resolve_or_raise(agent_id)
-        self._client.request("agent.send", {"target": info.agent_id, "text": text})
+        # protocol 19: the agent.send method itself no longer exists on the wire
+        # (invalid_request: unknown variant agent.send) -- agent.prompt is the
+        # replacement, and it has the same terminal_id-target regression as
+        # agent.read (see PROTOCOL_AGENT_TARGET_REGRESSION / _agent_target above).
+        method = "agent.prompt" if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION else "agent.send"
+        self._client.request(method, {"target": self._agent_target(info), "text": text})
         result = SendResult(ok=True, agent_id=info.agent_id, actor_id=actor_id,
                             priority=priority,
                             sent_at=datetime.now(UTC))
@@ -327,10 +352,16 @@ class BridgeActions:
 
         sub = None
         try:
-            subs = [
+            subs: list[dict[str, Any]] = [
                 {"type": "pane.agent_status_changed", "pane_id": info.pane_id},
-                # broad output_matched subscription; the callback filters via normalized + predicate (supports any marker)
-                {"type": "pane.output_matched", "pane_id": info.pane_id, "source": "recent"},
+                # broad output_matched subscription; the callback filters via normalized + predicate
+                # (supports any marker). protocol 19 made `match` a required field where it used to
+                # be absent/optional (2026-08-04 Herdr 0.8.0 finding); scoped to exactly protocol 19
+                # like the other 0.8.0 workarounds above, so protocol 16 keeps its existing,
+                # already-working subscription shape untouched.
+                {"type": "pane.output_matched", "pane_id": info.pane_id, "source": "recent",
+                 **({"match": {"type": "regex", "value": ".*"}}
+                    if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION else {})},
             ]
             sub = self._client.subscribe(subs, on_event=_wait_on_event)
             if not sub.wait_connected(3.0):
@@ -424,10 +455,12 @@ def connect(socket_path: str | None = None, *,
             herdr_bin: str = "herdr") -> BridgeActions:
     path, source = _resolve_socket(socket_path, herdr_bin)
     client = SocketClient(path)
-    check_server_compat(client)
+    compat_info = check_server_compat(client)
     cache = SessionCache(client)
     cache.start()
     actions = BridgeActions(client, cache, AuditLogger(audit_path))
     actions._resolved_socket_path = path
     actions._socket_source = source
+    protocol = compat_info.get("protocol")
+    actions._protocol = protocol if isinstance(protocol, int) else None
     return actions

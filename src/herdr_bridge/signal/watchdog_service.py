@@ -4,13 +4,15 @@
 
 """launchd installer for the Signal daemon's own healthcheck watchdog.
 
-This watchdog monitors herdr-bridge's own Signal daemon specifically -- a
-herdr-bridge concern, not generic cross-project tower governance -- so it's
-a first-class herdr-bridge feature rather than something an external
-governance-layer project's tower-management tooling should own (see
-`CONTRIBUTING.md`'s "Governance-layer boundary" section for that split).
-Lets herdr-bridge install/remove its own healthcheck service with no
-external dependency required to set it up.
+2026-08-02 ownership split: a shared cross-project daemon (run by another
+tower in this ecosystem) absorbed the shared, cross-project tower services
+(command-tower-watchdog, pane-ttl-reaper, pane-labels), but deliberately did
+*not* fold this one in — it monitors herdr-bridge's own Signal daemon (a
+herdr-bridge-specific concern, not cross-tower governance), and folding it
+into that shared daemon would violate its agent-neutral design. This module
+is herdr-bridge's own replacement for the ad-hoc plist that an external
+bootstrap generator used to produce for it, so herdr-bridge no longer
+depends on an external generator for this one service.
 
 Every side-effecting function here takes its filesystem/subprocess/lookup
 dependencies as explicit parameters (`runner`, `which`, `uid`,
@@ -52,8 +54,9 @@ def plist_label(project: str) -> str:
     """The launchd Label for this project's Signal healthcheck watchdog.
 
     Uses the plain `herdr` prefix (no `com.`/vendor/company segment, no
-    project name baked into the prefix) -- deliberately not a vendor-branded
-    reverse-DNS-style identifier."""
+    project name baked into the prefix) per the 2026-08-02 naming decision
+    that replaced the old `com.megapower.*` scheme -- see
+    docs/decisions/ (Megapower branding removal)."""
     return f"herdr.signal-healthcheck.{slugify_project(project)}"
 
 

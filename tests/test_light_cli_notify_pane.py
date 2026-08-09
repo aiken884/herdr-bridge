@@ -397,7 +397,7 @@ def test_notify_pane_ready_check_ignores_keywords_in_scrollback_history(monkeypa
     last few lines of the screen. If the agent's conversation history (already
     scrolled above the visible area) happens to mention "password"/"(y/n)"/
     "enter to confirm"/"trust this folder" -- for example while discussing
-    these keywords themselves (common in real usage: dispatch messages and
+    these keywords themselves (common during dogfooding: dispatch messages and
     replies frequently mention trust dialogs/y-n prompts/password input) --
     the ready check would misjudge the pane as being in a non-injectable
     state and reject an otherwise legitimate injection.
@@ -1146,6 +1146,27 @@ def test_looks_submitted_returns_false_when_head_still_visible_in_box():
     assert result.ambiguous is False
 
 
+def test_looks_submitted_is_ambiguous_when_box_nonempty_but_neither_head_nor_tail_found():
+    """2026-08-02 field incident: a Herdr Bridge Signal wake message was left
+    stuck in the target's input box, yet notify-pane reported "delivery
+    confirmed" and never sent the follow-up Enter. Root cause: when the
+    bordered input box is non-empty but neither the message's head nor tail
+    can be matched inside it (e.g. normalization/wrapping means the substring
+    match just doesn't line up, or something else entirely is sitting in the
+    box), the old logic fell through to `_SubmitCheck(True, False)` --
+    "confirmed submitted", skipping the caller's follow-up Enter entirely.
+    A non-empty box that doesn't obviously match the message is NOT a
+    trustworthy "it's gone" signal the way a completely empty box is; this
+    must come back ambiguous so the caller still sends the safety-net Enter
+    instead of silently leaving the message stuck."""
+    from herdr_bridge.light.cli import _looks_submitted
+
+    before = "──────────────────────────────\n❯ \n──────────────────────────────"
+    after = "──────────────────────────────\n❯ some unrelated leftover text\n──────────────────────────────"
+    result = _looks_submitted(before, after, "totally different message content here", tui="claude")
+    assert result.ambiguous is True
+
+
 def test_notify_pane_gemini_box_wrapped_message_stuck_triggers_enter_fallback(monkeypatch, capsys):
     """2026-07-25 hard-won lesson (a real incident, caught in the moment): the
     Gemini CLI's input box is a paired-border box like claude's (top border
@@ -1223,3 +1244,129 @@ def test_extract_input_box_text_uses_provided_markers_not_hardcoded_claude_marke
     result = _extract_input_box_text(snapshot, markers=(">",))
     assert result is not None
     assert "content" in result
+
+
+# ---------------------------------------------------------------------------
+# _read_until_stable: debounced settle detection (2026-08-01 fix)
+#
+# Blood-lesson: a ~600-char message injected into a live external tower's pane
+# was reported "delivery confirmed" on the very first check, but was still
+# sitting unsent in the input box when manually re-verified a few seconds
+# later. Feeding that exact stuck-screen text into _looks_submitted() in
+# isolation correctly judged "not submitted" -- the detection logic itself was
+# fine. The bug was a race: a single fixed-delay sleep-then-read-once check can
+# catch a transient, not-yet-settled screen frame. The fix replaces the fixed
+# sleep with polling until the screen stops changing.
+# ---------------------------------------------------------------------------
+
+
+def test_read_until_stable_returns_immediately_once_two_reads_match(monkeypatch):
+    from herdr_bridge.light import cli
+    from herdr_bridge.light.cli import _read_until_stable
+
+    reads = ["same", "same", "same"]
+    calls = {"n": 0}
+
+    def fake_pane_read(pane_id, *, lines=40, source="recent"):
+        calls["n"] += 1
+        return reads[min(calls["n"] - 1, len(reads) - 1)]
+
+    monkeypatch.setattr(cli, "_pane_read", fake_pane_read)
+
+    result = _read_until_stable("w1:p1", lines=40, max_wait=5.0)
+
+    assert result == "same"
+    assert calls["n"] == 2, "should stop as soon as two consecutive reads match, not keep polling"
+
+
+def test_read_until_stable_waits_out_a_transient_frame_before_settling(monkeypatch):
+    """The exact shape of the 2026-08-01 bug: the first read looks like
+    "submitted" (a transient render artifact), but the screen hasn't actually
+    settled yet -- later reads show the real, stable state. The debounced
+    poll must not trust that first transient read; it should keep polling
+    until the *real* state repeats and return that instead."""
+    from herdr_bridge.light import cli
+    from herdr_bridge.light.cli import _read_until_stable
+
+    # index 0: transient "looks empty" frame; index 1+: the real, settled,
+    # still-stuck state, repeating.
+    reads = ["❯ \n", "❯ still stuck here\n", "❯ still stuck here\n", "❯ still stuck here\n"]
+    calls = {"n": 0}
+
+    def fake_pane_read(pane_id, *, lines=40, source="recent"):
+        calls["n"] += 1
+        return reads[min(calls["n"] - 1, len(reads) - 1)]
+
+    monkeypatch.setattr(cli, "_pane_read", fake_pane_read)
+
+    result = _read_until_stable("w1:p1", lines=40, max_wait=5.0)
+
+    assert result == "❯ still stuck here\n", (
+        "must return the settled state (which repeats), not the transient "
+        "first read that never recurs"
+    )
+
+
+def test_read_until_stable_respects_max_wait_ceiling(monkeypatch):
+    """If the screen never stabilizes (every read differs), must not poll
+    forever -- return the last read once max_wait elapses."""
+    from herdr_bridge.light import cli
+    from herdr_bridge.light.cli import _read_until_stable
+
+    calls = {"n": 0}
+
+    def fake_pane_read(pane_id, *, lines=40, source="recent"):
+        calls["n"] += 1
+        return f"always different {calls['n']}"
+
+    monkeypatch.setattr(cli, "_pane_read", fake_pane_read)
+
+    result = _read_until_stable("w1:p1", lines=40, max_wait=0.15, poll_interval=0.05)
+
+    assert result == f"always different {calls['n']}"
+    assert calls["n"] >= 2, "should have polled more than once before giving up at the ceiling"
+
+
+def test_notify_pane_does_not_trust_a_transient_first_read(monkeypatch, capsys):
+    """End-to-end reproduction of the 2026-08-01 bug via `main()`: the first
+    screen read after injection looks like the message was submitted (a
+    transient artifact), but the screen hasn't actually settled -- the real,
+    repeating state still shows the message stuck in the input box. With a
+    nonzero --settle-delay (the new default), notify-pane must not report a
+    false "delivery confirmed" off that first transient read; it should
+    detect the message is still stuck and proceed to the Enter fallback."""
+    message = "please check the deploy"
+    read_call_count = {"n": 0}
+
+    def handler(argv):
+        if argv[:3] == ["herdr", "pane", "read"]:
+            read_call_count["n"] += 1
+            n = read_call_count["n"]
+            if n == 1:
+                # transient: looks like the box is already empty
+                return _read_result("history\n❯ \n")
+            if n <= 3:
+                # settles back to the real state: still stuck
+                return _read_result(f"history\n❯ {message}")
+            # after the follow-up Enter: genuinely committed
+            return _read_result(f"history\n{message}\n❯ \n")
+        if argv[:3] == ["herdr", "pane", "send-text"]:
+            return _ok_result()
+        if argv[:3] == ["herdr", "pane", "send-keys"]:
+            return _ok_result()
+        if argv[:3] == ["herdr", "pane", "get"]:
+            return _read_result('{"result": {"pane": {"agent_status": "idle"}}}')
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    _install_fake_run(monkeypatch, handler)
+
+    rc = main(["notify-pane", "--pane", "w1:p1", "--no-audit", "--settle-delay", "1.0", message])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "✅" in out
+    assert "fallback_enter_used=True" in out, (
+        "the first read was a transient false-positive; the debounced settle "
+        "check should have seen through it and gone to the Enter fallback "
+        "instead of confirming success off the transient read alone"
+    )

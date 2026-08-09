@@ -4,8 +4,8 @@
 
 """#65: single-source-of-truth tests for the five TUIs' prompt pattern table.
 
-The production path (`herdr_bridge.light.cli`) and a separate real-screen
-verification harness used to each maintain their own copy of the pattern
+The production path (`herdr_bridge.light.cli`) and the dogfooding harness
+(`screen_oracle.py`) used to each maintain their own copy of the pattern
 table, and the resulting capability mismatch was a structural problem
 (codex/agy's markers only existed in the harness's copy, not the production
 path, causing notify-pane to misjudge these two TUIs). This makes sure both
@@ -73,3 +73,10 @@ def test_locate_any_returns_none_when_nothing_matches():
 def test_marker_head_takes_first_line_prefix():
     assert tui_patterns.marker_head("hello\nworld", head_len=3) == "hel"
 
+
+def test_screen_oracle_imports_same_prompt_patterns_object_not_a_copy():
+    """Prevent future maintenance drift: confirm the harness side imports the
+    exact same object from src/, not a copy."""
+    from tests.support import screen_oracle
+
+    assert screen_oracle.PROMPT_PATTERNS is tui_patterns.PROMPT_PATTERNS

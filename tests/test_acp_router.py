@@ -572,6 +572,94 @@ def test_fleet_event_listener_stays_connected_with_multiple_panes(capsys):
     )
 
 
+def test_auto_unblock_targets_pane_id_not_bookkeeping_agent_id(monkeypatch):
+    """Regression (Herdr 0.7.5 CLI compat): the changelog tightened `agent`-family
+    commands to "accept only a unique live agent name or the pane ID currently
+    hosting that agent" (verified live against the real 0.7.5 binary: `herdr agent
+    send-keys acp-router-confirm enter` -> agent_not_found, exit 1).
+
+    _handle_event's blocked-status branch calls `_auto_unblock(pane, name, tid, aid)`
+    where `aid = m.get("agent_id", pane)` comes straight from a RemaGraph
+    fleet-member record. Every member recorded via dispatch_with_memory_confirm has
+    `agent_id=used_aid`, and `used_aid` starts as the literal bookkeeping string
+    "acp-router-confirm" (see dispatch_with_memory_confirm) -- never a live Herdr
+    agent name and never the pane id. Under 0.7.5 that value is rejected outright,
+    so the old `herdr agent send-keys <agent_ref> ...` call silently never unblocks
+    anything (subprocess.run is invoked with check=False and its returncode is never
+    inspected). The fix: target `pane_id`, which the closure already has on hand and
+    which genuinely is "the pane ID currently hosting that agent" for a pane whose
+    status just transitioned to blocked.
+    """
+    import herdr_bridge.acp.router as router_mod
+    from herdr_bridge.testing import FakeHerdrServer
+
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _Result()
+
+    monkeypatch.setattr(router_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(router_mod, "_send_moshi_envelope", lambda *a, **k: False)
+
+    PANE = "wTEST:p1"
+    BOOKKEEPING_AGENT_ID = "acp-router-confirm"
+    fake_member = {
+        "agent_id": BOOKKEEPING_AGENT_ID,
+        "task_id": "t1",
+        "name": "fake-fleet-member",
+        "learnings": [f"pane_id={PANE}"],
+    }
+    monkeypatch.setattr(router_mod._rg, "recall_fleet_members", lambda **k: [fake_member])
+    monkeypatch.setattr(router_mod._rg, "store_memory", lambda *a, **k: {"ok": True})
+
+    with FakeHerdrServer() as srv:
+        monkeypatch.setenv("HERDR_SOCKET_PATH", srv.socket_path)
+        router = create_herdr_router(project="herdr-bridge", start_fleet_listener=True)
+        try:
+            router._watch_fleet_pane(PANE)
+
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if any(r.get("method") == "events.subscribe" for r in srv.requests):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("fleet listener never sent events.subscribe to the fake server")
+
+            srv.push_event(
+                "pane.agent_status_changed",
+                {"pane_id": PANE, "agent_status": "blocked", "state_change_seq": 1},
+            )
+
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if any(c[:3] == ["herdr", "agent", "send-keys"] for c in calls):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("blocked event never triggered a `herdr agent send-keys` call")
+        finally:
+            listener = getattr(router, "_fleet_listener", None)
+            if listener is not None:
+                listener.stop()
+
+    send_keys_calls = [c for c in calls if c[:3] == ["herdr", "agent", "send-keys"]]
+    assert send_keys_calls, "expected at least one `herdr agent send-keys` call"
+    for argv in send_keys_calls:
+        target = argv[3]
+        assert target == PANE, (
+            f"agent send-keys target should be the pane id {PANE!r} (the pane "
+            f"currently hosting the blocked agent, valid under Herdr 0.7.5's "
+            f"'unique live agent name or hosting pane id' rule), got {target!r} "
+            f"instead -- 0.7.5 rejects this with agent_not_found"
+        )
+        assert target != BOOKKEEPING_AGENT_ID
+
+
 # ---------------------------------------------------------------------------
 # Per-layer verification + adversarial review (goal item 4)
 # Main (RemaGraph PONG), Backup (ACP), Last insurance (side-channel)
@@ -595,8 +683,23 @@ def test_layer_verification_main_remagraph_pong(monkeypatch):
 
 
 def test_layer_verification_backup_acp(monkeypatch):
-    """Standalone verification of the backup layer (explicit ACP)."""
+    """Standalone verification of the backup layer (explicit ACP).
+
+    Root cause of the 2026-08-09 Wave 5 intermittent failure (1/4 attempts in a
+    full regression run): this test previously exercised the real
+    `wait_for_pong()` polling loop, which calls the real `_rg.recall_memories`
+    (semantic search) with an 8s timeout — a dependency on real timing/search
+    nondeterminism that this test's actual scope (does a failed ACP prompt()
+    get correctly reflected as failure, not misjudged as success) never needed.
+    Mocking `wait_for_pong` deterministically, as `test_adversarial_per_layer_all_fail`
+    already does for the equivalent all-layers-fail scenario, removes that
+    dependency entirely. Investigation notes: RemaGraph
+    task-id=command-tower-leader-flaky-test-layer-verification-backup-acp.
+    """
     r = create_herdr_router(project="test-layer-acp")
+    # isolate from real RemaGraph polling/timing (not this test's concern -- see docstring)
+    monkeypatch.setattr(r, "wait_for_pong", lambda *a, **k: {"ok": False, "reason": "timeout"})
+    r._side_reports.clear()
     # adversarial review: simulate ACP failing
     async def mock_prompt_fail(*a, **k):
         raise RuntimeError("ACP fail simulated")

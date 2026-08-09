@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -74,15 +75,15 @@ def _resolve_signal_project(args_project: str | None, default: str = "herdr-brid
     silently defaulting to "herdr-bridge" when a non-herdr-bridge tower
     forgets --project doesn't just query the wrong project, it tries to
     start/operate herdr-bridge's own daemon under someone else's identity
-    (2026-08-01 field report from a downstream deployment: bare `signal start` collided
-    with herdr-bridge's own daemon lock and failed). CT_PROJECT -- written by
+    (2026-08-01 field report from a downstream tower: bare `signal start`
+    collided with herdr-bridge's own daemon lock and failed). CT_PROJECT -- written by
     bootstrap-tower.sh's session.env and set on every towerops launchd plist
     -- is the actual "which tower is this" source of truth in this ecosystem,
     so it's checked before the more general-purpose HERDR_MEMORY_PROJECT.
 
-    REMAGRAPH_PROJECT is deliberately NOT in this chain (2026-08-01 second
-    field report, a real bug in the first fix, not a stylistic
-    choice): `herdr_bridge/__init__.py` unconditionally sets
+    REMAGRAPH_PROJECT is deliberately NOT in this chain (2026-08-01 a
+    downstream tower's second field report, a real bug in the first fix, not
+    a stylistic choice): `herdr_bridge/__init__.py` unconditionally sets
     `os.environ["REMAGRAPH_PROJECT"] = "herdr-bridge"` as an import-time side
     effect (`_ensure_remagraph_project`, orchestration/memory.py), on every
     single process that imports this package -- which is every
@@ -102,7 +103,7 @@ def _resolve_signal_project(args_project: str | None, default: str = "herdr-brid
     the profile, not a child of the bootstrap process). So a bare `signal
     status` typed by hand in a non-herdr-bridge tower's own session still
     falls through to `default`, now correctly triggering the warning below
-    (2026-08-01 follow-up field report: this used to be worse
+    (2026-08-01 follow-up field report from the same downstream tower: this used to be worse
     than a plain wrong answer, because if herdr-bridge's own daemon happened
     to be alive, the tower saw "✅ running" and reasonably assumed it was
     looking at *its own* daemon). Since that fallback can't be fixed away by
@@ -948,7 +949,7 @@ def _detect_blocking_prompt(snapshot: str) -> str | None:
     the tail lines is enough to catch it; whereas searching the whole snapshot would
     misjudge a pane as being stuck on an interactive prompt just because the agent's
     conversation history happens to mention "password"/"(y/n)"/"enter to confirm" —
-    for example, while discussing these very keywords (common in real usage:
+    for example, while discussing these very keywords (common during dogfooding:
     dispatched messages and replies frequently mention trust-confirmation
     dialogs/y-n prompts/password entry as topics) — rejecting an injection that was
     actually legitimate (discovered 2026-07-25).
@@ -1256,7 +1257,7 @@ def _doctor_check_signal_daemon(project: str, problems: list[str]) -> None:
     pin_path = state_dir / "pane_id.pin"
 
     if not lock_path.exists():
-        _say("ℹ️  Signal daemon has never been started for this project (not an error — signal start when ready)")
+        _say(f"ℹ️  Signal daemon has never been started for project={project} (not an error — signal start when ready)")
         return
 
     from herdr_bridge.signal.lock import DaemonAlreadyRunning, SingleInstanceLock
@@ -1266,10 +1267,11 @@ def _doctor_check_signal_daemon(project: str, problems: list[str]) -> None:
         probe.acquire()
         probe.release()
         problems.append(
-            "Signal daemon lock file exists but is not held by any live process "
-            "(the daemon has stopped) — restart it with `herdr-commander signal start`"
+            f"Signal daemon lock file exists but is not held by any live process for "
+            f"project={project} (the daemon has stopped) — restart it with "
+            f"`herdr-commander signal start --project {project}`"
         )
-        _err("❌ Signal daemon is not running (lock not held)")
+        _err(f"❌ Signal daemon is not running for project={project} (lock not held)")
         return
     except DaemonAlreadyRunning:
         pass  # a live process holds the lock -- daemon is alive, continue below
@@ -1285,13 +1287,14 @@ def _doctor_check_signal_daemon(project: str, problems: list[str]) -> None:
             still_exists = True  # can't tell -- don't false-positive situation B
         if not still_exists:
             problems.append(
-                f"Signal daemon is running but bound to pane_id={pinned_pane_id!r}, which no "
-                "longer exists (situation B: the pane was rebuilt) — re-run bootstrap to bind "
-                "the new pane_id, restarting the daemon alone will not fix this"
+                f"Signal daemon for project={project} is running but bound to "
+                f"pane_id={pinned_pane_id!r}, which no longer exists (situation B: the pane "
+                "was rebuilt) — re-run bootstrap to bind the new pane_id, restarting the "
+                "daemon alone will not fix this"
             )
-            _err(f"❌ Signal daemon's pane_id={pinned_pane_id!r} no longer exists (pane was rebuilt)")
+            _err(f"❌ Signal daemon for project={project}: pane_id={pinned_pane_id!r} no longer exists (pane was rebuilt)")
             return
-    _say("✅ Signal daemon is running")
+    _say(f"✅ Signal daemon is running for project={project}")
 
 
 def _shared_secret_path(project_id: str) -> Path:
@@ -1458,9 +1461,9 @@ _WATCHDOG_DEFAULT_PATH_ENV = "/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin
 
 def cmd_signal_install_watchdog(args: argparse.Namespace) -> int:
     """Install (or reinstall) this project's Signal healthcheck watchdog as a
-    launchd service (macOS). A herdr-bridge-owned feature -- no external
-    tooling required to set it up (see `watchdog_service`'s module docstring
-    for why this one service isn't shared cross-project tower tooling)."""
+    launchd service (macOS). This is herdr-bridge's own replacement for the
+    ad-hoc plist an external tower-bootstrap generator used to produce --
+    2026-08-02 ownership split, see docs/decisions/."""
     from herdr_bridge.orchestration._state_paths import signal_state_dir
     from herdr_bridge.signal import watchdog_service
 
@@ -1878,6 +1881,85 @@ def cmd_memory_link(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_status(args: argparse.Namespace) -> int:
+    """列出 Task Board 目前所有任務的狀態（規格 §4.1，新增 CLI）。"""
+    import json as _json
+
+    from herdr_bridge.orchestration.task_board import default_snapshot_path
+
+    path = default_snapshot_path()
+    if not path.exists():
+        _say("目前沒有任務記錄（Task Board 快照尚未建立）。")
+        return 0
+
+    board = _json.loads(path.read_text())
+    tasks = board.get("tasks", {})
+    if not tasks:
+        _say("目前沒有任務。")
+        return 0
+
+    _say(f"Task Board（{len(tasks)} 筆）：")
+    for task_id, task in tasks.items():
+        status = task.get("status", "?")
+        claimed_by = task.get("claimed_by", "-")
+        legacy = " [legacy]" if task.get("_legacy") else ""
+        print(f"  {task_id}  status={status:<12} claimed_by={claimed_by}{legacy}")
+    return 0
+
+
+def _fleet_health_seen_path() -> Path:
+    from herdr_bridge.core.paths import resolve_project_root
+    return resolve_project_root() / ".herdr" / "fleet_health_seen.json"
+
+
+def cmd_task_health(args: argparse.Namespace) -> int:
+    """單次健康檢查（任務 #32，BT-07 架構缺口）：讀 task_board.json、判斷異常、跟上次
+    呼叫的結果比對只回報新的/惡化的異常。設計成給指揮塔自己的自我重排 ScheduleWakeup
+    迴圈重複呼叫——排程不在這裡，這個指令只做「單次檢查」，重複告警抑制靠
+    .herdr/fleet_health_seen.json 跨次呼叫存續狀態。"""
+    from datetime import datetime
+
+    from herdr_bridge.fleet_health import check_fleet_health, filter_new_anomalies
+    from herdr_bridge.orchestration.task_board import default_snapshot_path
+
+    board_path = default_snapshot_path()
+    if not board_path.exists():
+        _say("目前沒有任務記錄（Task Board 快照尚未建立），無異常可檢查。")
+        return 0
+
+    board = json.loads(board_path.read_text())
+    anomalies = check_fleet_health(
+        board, now=datetime.now(UTC),
+        heartbeat_stale_seconds=args.heartbeat_stale_seconds,
+        error_count_threshold=args.error_count_threshold,
+    )
+
+    seen_path = _fleet_health_seen_path()
+    try:
+        seen_raw = json.loads(seen_path.read_text()) if seen_path.exists() else {}
+    except json.JSONDecodeError:
+        seen_raw = {}
+    seen = {tuple(k.split("\x1f", 1)): v for k, v in seen_raw.items()}
+
+    fresh, new_seen = filter_new_anomalies(anomalies, seen=seen)
+
+    seen_path.parent.mkdir(parents=True, exist_ok=True)
+    seen_path.write_text(json.dumps(
+        {"\x1f".join(k): v for k, v in new_seen.items()}, ensure_ascii=False, indent=2,
+    ))
+
+    if not fresh:
+        _say(f"艦隊健康檢查：無新異常（本輪共偵測到 {len(anomalies)} 筆既有/已抑制異常）。")
+        return 0
+
+    _say(f"⚠️ 艦隊健康檢查：{len(fresh)} 筆新異常（不等業主詢問，主動預警）：")
+    for a in fresh:
+        print(f"  [{a.severity}] {a.rule_code}  task_id={a.task_id}  worker={a.worker or '-'}")
+        print(f"    {a.message}")
+        print(f"    建議動作：{a.suggested_action}")
+    return 0
+
+
 def _verbose_parent() -> argparse.ArgumentParser:
     """A shared parent parser exposing -v/--verbose to each subcommand
     individually (`herdr-commander doctor -v`, `herdr-commander run -v`, ...).
@@ -2089,6 +2171,18 @@ def build_parser() -> argparse.ArgumentParser:
     spsiguninstall = sigsub.add_parser("uninstall-watchdog", help="Unload and remove this project's Signal healthcheck launchd service (macOS)", parents=[_verbose_parent()])
     spsiguninstall.add_argument("--project", default=None, help="Herdr Bridge Memory project id (defaults to HERDR_MEMORY_PROJECT, otherwise herdr-bridge)")
     spsiguninstall.set_defaults(func=cmd_signal_uninstall_watchdog)
+
+    sptask = sub.add_parser("task", help="Task Board operations (規格 §4.1)")
+    tasksub = sptask.add_subparsers(dest="task_action", required=True)
+
+    sptaskstatus = tasksub.add_parser("status", help="List current Task Board task states", parents=[_verbose_parent()])
+    sptaskstatus.add_argument("--project", default=None, help="Herdr Bridge Memory project id (unused, reserved for parity with other status subcommands)")
+    sptaskstatus.set_defaults(func=cmd_task_status)
+
+    sptaskhealth = tasksub.add_parser("health", help="Single-shot fleet health check (heartbeat staleness / error thresholds / empty delivery); meant to be called repeatedly by a self-rescheduling monitoring loop", parents=[_verbose_parent()])
+    sptaskhealth.add_argument("--heartbeat-stale-seconds", type=float, default=180, help="Heartbeat age threshold in seconds before a claimed/in_progress task is flagged as disconnected (default: 180)")
+    sptaskhealth.add_argument("--error-count-threshold", type=int, default=3, help="error_count threshold above which a task is flagged as repeatedly failing (default: 3)")
+    sptaskhealth.set_defaults(func=cmd_task_health)
 
     return p
 

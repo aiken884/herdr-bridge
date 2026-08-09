@@ -1651,6 +1651,18 @@ class AcpRouter(Agent if ACP_SDK_AVAILABLE else object):
         External projects use this via create_herdr_router() + this method.
         Uses RemaGraph as the single source of truth for coordination.
         """
+        from herdr_bridge.gates import GateExecutor, GateResult
+
+        gate_context = {"task": {"assigned_to": {"pane": pane_id, "agent": target}}}
+        gate_result: GateResult = GateExecutor().check("DISPATCH", gate_context)
+        if not gate_result.passed:
+            return {
+                "ok": False,
+                "gate_rejected": True,
+                "error": gate_result.error_msg,
+                "rejected_by": gate_result.rejected_by,
+            }
+
         if not prompt or not isinstance(prompt, str):
             return {"ok": False, "error": "prompt must be a non-empty string", "routed_to": None}
 

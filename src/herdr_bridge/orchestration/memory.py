@@ -1429,8 +1429,9 @@ def mark_accepted(
     losing the already-recorded `injected` (or later) state would be worse
     than the metadata staying momentarily incomplete.
 
-    2026-08-02 field incident (a real downstream deployment repro'd this twice,
-    root-fix request): the race note above describes the *intended* handling, but the
+    2026-08-02 field incident (reproduced twice on w18:p1 by a downstream
+    tower, root-fix request): the race note above describes the *intended*
+    handling, but the
     original implementation had a second, narrower TOCTOU gap of its own —
     this function read `current` ONCE to decide `target_state`, then called
     `_write_signal_state()`, which independently re-reads `current` a SECOND
@@ -1494,11 +1495,11 @@ def mark_escalated(project_id: str, message_id: str, reason: str, **kwargs: Any)
     escalation this call is about to record is stale: the send actually
     succeeded. Regressing the already-recorded, better state (or raising --
     which is what used to happen, crashing the caller's whole CLI process for
-    multiple downstream deployments and blocking every Signal send to
+    every tower sharing this Signal setup and blocking every Signal send to
     herdr-bridge) is worse than a no-op that returns the current state as-is.
 
-    2026-08-02 field incident, take two (the ACTUAL reported bug,
-    repro'd twice in the field: "Invalid Signal transition: completed ->
+    2026-08-02 field incident, take two (a downstream tower's actual
+    reported bug, repro'd twice on w18:p1: "Invalid Signal transition: completed ->
     injection_unconfirmed. Allowed: []", exit 1, yet `signal status` showed
     the envelope already state=completed): the pre-check above only closes
     the WIDE version of this race, where the daemon had already reached its

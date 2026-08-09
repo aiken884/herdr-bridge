@@ -36,6 +36,7 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from herdr_bridge.orchestration import find_active_signal_by_target, mark_completed, mark_injected
@@ -59,6 +60,12 @@ NONCE_CACHE_TTL_SECONDS = 60.0
 _NOTIFY_PANE_SUBPROCESS_TIMEOUT_SECONDS = 15.0
 
 _MAX_LINE_BYTES = 64 * 1024
+
+#: C3（規格 §4.5）：claimed 任務超過這個秒數沒有 heartbeat 就視為 agent 已死，
+#: 由 daemon 週期性掃描回收（unclaim 回 pending）。
+_HEARTBEAT_TIMEOUT_SECONDS = 90
+_SCAN_INTERVAL_SECONDS = 30
+_STARTUP_SCAN_DELAY_SECONDS = 10
 
 
 class PaneIdResolutionError(RuntimeError):
@@ -130,6 +137,10 @@ class SignalDaemon:
         merge_window_seconds: float = MERGE_WINDOW_SECONDS,
     ) -> None:
         self.project_id = project_id
+        # C3 GC（規格 §4.5）：TaskPool 建構參數叫 project_id，這裡另存一個 project
+        # 別名純粹是為了讓 _scan_and_reap_expired_claims() 能用 SignalDaemon.__new__
+        # 繞過建構子做單元測試（只設 daemon.project，不跑整個 __init__）。
+        self.project = project_id
         self.own_pane_id = own_pane_id
         self._shared_secret = shared_secret
         self._herdr_commander_bin = herdr_commander_bin
@@ -289,6 +300,67 @@ class SignalDaemon:
             return False
         return True
 
+    # -- task board GC (C3, 規格 §4.5) ------------------------------------
+
+    def _scan_and_reap_expired_claims(self) -> int:
+        """週期性掃描 claimed 任務，heartbeat 逾時（90s）就 unclaim 回 pending
+        （規格 §4.5 C3）。單次掃描失敗只 log warning，不影響主迴圈。"""
+        from herdr_bridge.orchestration import task_board as tb
+        from herdr_bridge.task_pool import TaskPool
+
+        try:
+            board_path = tb.default_snapshot_path()
+            if not board_path.exists():
+                return 0
+            board = json.loads(board_path.read_text())
+        except Exception:
+            logger.warning("task board GC scan failed to read snapshot", exc_info=True)
+            return 0
+
+        pool = TaskPool(project_id=self.project)
+        reaped = 0
+        now = datetime.now(UTC)
+        for task in list(board.get("tasks", {}).values()):
+            if task.get("status") != "claimed":
+                continue
+            hb = task.get("heartbeat_ts")
+            if hb is None:
+                continue
+            try:
+                age = (now - datetime.fromisoformat(hb)).total_seconds()
+            except (ValueError, TypeError, AttributeError):
+                # 2026-08-09 CodeGraph 全專案診斷發現：這裡原本沒有 try/except，任何
+                # 一筆任務的 heartbeat_ts 格式異常（含非字串型別）或缺時區（naive，
+                # 跟 tzinfo-aware 的 now 相減會 TypeError）都會讓例外直接往上拋，中斷
+                # 整個 for 迴圈——不是跳過那一筆壞資料，是這次掃描『之後所有任務』都
+                # 不會被檢查，逾時認領永遠回收不到。壞資料本身跳過，其餘任務照常掃。
+                logger.warning(
+                    "[Signal/GC] task=%s 的 heartbeat_ts 無法解析（%r），跳過此筆，"
+                    "不中斷其餘任務的掃描", task.get("task_id"), hb,
+                )
+                continue
+            if age > _HEARTBEAT_TIMEOUT_SECONDS:
+                try:
+                    pool.unclaim(task["task_id"], task.get("claimed_by", "unknown"))
+                    reaped += 1
+                    logger.info(
+                        "[Signal/GC] task=%s unclaimed after %ds heartbeat silence",
+                        task["task_id"], age,
+                    )
+                except Exception:
+                    logger.warning("GC unclaim failed for task=%s", task["task_id"], exc_info=True)
+        return reaped
+
+    async def _periodic_task_gc_loop(self) -> None:
+        """與既有 Signal routing 邏輯並存、不互相阻塞的獨立週期性 coroutine。"""
+        await asyncio.sleep(_STARTUP_SCAN_DELAY_SECONDS)
+        while True:
+            try:
+                self._scan_and_reap_expired_claims()
+            except Exception:
+                logger.warning("periodic task board GC loop iteration failed", exc_info=True)
+            await asyncio.sleep(_SCAN_INTERVAL_SECONDS)
+
     # -- lifecycle --------------------------------------------------------
 
     async def serve(self, socket_path: Path) -> asyncio.Server:
@@ -301,8 +373,16 @@ class SignalDaemon:
 
     async def serve_forever(self, socket_path: Path) -> None:
         server = await self.serve(socket_path)
-        async with server:
-            await server.serve_forever()
+        gc_task = asyncio.ensure_future(self._periodic_task_gc_loop())
+        try:
+            async with server:
+                await server.serve_forever()
+        finally:
+            gc_task.cancel()
+            try:
+                await gc_task
+            except asyncio.CancelledError:
+                pass
 
 
 async def run(project_id: str, shared_secret: str) -> None:

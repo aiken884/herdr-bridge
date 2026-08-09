@@ -1,0 +1,10 @@
+{
+  "gates": [
+    { "id": "G01", "trigger": "DISPATCH", "check": "target_pane_and_agent_present",
+      "action_on_fail": "reject", "error_msg": "G01 FAIL: 派工缺少明確的 target_pane 或 agent，拒絕執行" },
+    { "id": "G03", "trigger": "MARK_DONE", "check": "dispatch_receipt_present",
+      "action_on_fail": "reject", "error_msg": "G03 FAIL: 任務標記完成前必須存在 dispatch_receipt" },
+    { "id": "G04", "trigger": "MARK_BLOCKED", "check": "blocked_reason_present",
+      "action_on_fail": "reject", "error_msg": "G04 FAIL: 標記 blocked 必須附上具體原因" }
+  ]
+}

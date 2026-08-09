@@ -178,3 +178,62 @@ def test_wait_predicate_wins_over_blocked(fake_herdr, tmp_path):
                         timeout_sec=10, poll_interval_sec=0)
     assert r.success is True
     assert r.reason == "predicate"
+
+
+def test_wait_exits_early_when_agent_prompt_stalled(fake_herdr, tmp_path):
+    """Herdr 0.7.5: agent prompt waits now report agent_status
+    "agent_prompt_stalled" after five seconds without an observed state
+    change instead of waiting indefinitely after an ineffective submission.
+    Mirrors the T-1 "blocked" early-exit: exit early with reason="stalled"
+    instead of burning the full timeout_sec budget. A predicate match still
+    takes priority (see the next test)."""
+    import copy
+    snap = copy.deepcopy(SNAPSHOT)
+    for a in snap["snapshot"]["agents"]:
+        a["agent_status"] = "agent_prompt_stalled"
+    for p in snap["snapshot"]["panes"]:
+        if p["agent_status"] is not None:
+            p["agent_status"] = "agent_prompt_stalled"
+    fake_herdr.set_handler("session.snapshot", lambda p: snap)
+    fake_herdr.set_handler("agent.read", lambda p: {"text": "waiting for prompt…"})
+    client = SocketClient(fake_herdr.socket_path)
+    cache = SessionCache(client)
+    cache.refresh_snapshot()
+    acts = BridgeActions(client, cache, AuditLogger(tmp_path / "a.jsonl"))
+
+    def push_soon():
+        time.sleep(0.1)
+        fake_herdr.push_event("pane.agent_status_changed",
+                              {"pane_id": "w1:p1", "agent_status": "agent_prompt_stalled"})
+
+    t = threading.Thread(target=push_soon, daemon=True)
+    t.start()
+    t0 = time.monotonic()
+    r = acts.wait_until("ruler-1", "term_a", lambda o: "NEVER" in o.text,
+                        timeout_sec=30, poll_interval_sec=0)
+    t.join()
+    assert r.success is False
+    assert r.reason == "stalled"
+    assert time.monotonic() - t0 < 5.0, "did not exit early on agent_prompt_stalled"
+
+
+def test_wait_predicate_wins_over_stalled(fake_herdr, tmp_path):
+    """Priority order mirrors T-1: still returns "predicate" when the
+    predicate matches, even if the agent is simultaneously reporting
+    agent_prompt_stalled."""
+    import copy
+    snap = copy.deepcopy(SNAPSHOT)
+    for a in snap["snapshot"]["agents"]:
+        a["agent_status"] = "agent_prompt_stalled"
+    fake_herdr.set_handler("session.snapshot", lambda p: snap)
+    fake_herdr.set_handler("agent.read", lambda p: {"text": "DONE: green"})
+    fake_herdr.set_handler("events.wait",
+                           lambda p: {"type": "event", "matched": True})
+    client = SocketClient(fake_herdr.socket_path)
+    cache = SessionCache(client)
+    cache.refresh_snapshot()
+    acts = BridgeActions(client, cache, AuditLogger(tmp_path / "a.jsonl"))
+    r = acts.wait_until("ruler-1", "term_a", lambda o: "DONE" in o.text,
+                        timeout_sec=10, poll_interval_sec=0)
+    assert r.success is True
+    assert r.reason == "predicate"

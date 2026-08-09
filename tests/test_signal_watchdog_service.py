@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for `herdr_bridge.signal.watchdog_service` — the launchd installer for
-the Signal daemon's own healthcheck watchdog: a herdr-bridge-owned feature,
-not something generic cross-project tower-governance tooling should own."""
+the Signal daemon's own healthcheck watchdog (2026-08-02 ownership split: this
+one service stays herdr-bridge's own responsibility, unlike the other launchd
+tower services a shared cross-project daemon now owns)."""
 
 from __future__ import annotations
 

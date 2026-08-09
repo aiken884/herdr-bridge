@@ -71,7 +71,7 @@ herdr-bridge is the **foundation**: the right way to extend it is to **build you
 ## Dependency Boundary
 
 - Zero third-party runtime dependencies.
-- At runtime this drives a separate Herdr server (AGPL-3.0 as of Herdr's last tagged release — Herdr's upstream has an unreleased changelog entry announcing a move to Apache-2.0, not yet shipped); herdr-bridge itself is Apache-2.0 and is an independent client of it. Whatever AGPL obligations apply to your network-service scenario, with respect to Herdr's *currently released* license, are yours to evaluate (see README, NOTICE).
+- At runtime this drives a separate Herdr server. **Update (2026-08-04): Herdr [v0.8.0](https://github.com/herdrdev/herdr/releases/tag/v0.8.0) (2026-08-03) shipped the relicense from AGPL-3.0-or-later to Apache-2.0** — verified against that tag's `LICENSE` file; pre-0.8.0 Herdr installs remain AGPL-3.0-or-later. herdr-bridge itself is Apache-2.0 and is an independent client of it. Whatever AGPL obligations apply to your network-service scenario, with respect to Herdr's *currently installed* license, are yours to evaluate (see README, NOTICE).
 
 ---
 
@@ -138,7 +138,7 @@ herdr-bridge is the **foundation**: the right way to extend it is to **build you
 
 - `herdr_bridge.acp.adapter` 的個別函式（`build_opencode_permission_config`／`write_session_config`／`build_acpx_argv_and_env`／`build_acpx_policy_flags`／`resolve_patched_opencode_binary`／`detect_target_triple`）——`AcpActions`/`AcpxTransport` 的組裝積木，不是給消費者直接呼叫的介面。
 - `herdr_bridge.acp.transport.AcpxTransport`／`AcpTransport` Protocol／`PromptHandle`——SDK 演進接縫（D-10），未來可能整個替換為官方 ACP SDK 直連的實作，消費者只透過 `AcpActions` 間接使用。
-- `herdr_bridge.acp.binding` 的 ledger 函式——上層派工對帳用的工具，不是這個模組自己會呼叫的路徑（policy-neutral，故意留給上層決定何時用）。
+- `herdr_bridge.acp.binding` 的 ledger 函式——政策層的派工對帳工具，不是這個模組自己會呼叫的路徑（policy-neutral，故意留給上層決定何時用）。
 - `herdr_bridge.acp.events` 的 NDJSON 解析細節。
 
 ## 擴充方式
@@ -148,4 +148,4 @@ herdr-bridge 是**地基**：擴充的正道是**在五函式之上建構你自�
 ## 相依邊界
 
 - Runtime 零第三方依賴。
-- 執行期驅動一個獨立的 Herdr server(以最新正式發行版而言為 AGPL-3.0——Herdr 上游 changelog 有一筆尚未隨正式版本釋出的「改採 Apache-2.0」條目);herdr-bridge 本身 Apache-2.0，是其獨立 client。網路服務場景的 AGPL 義務,就 Herdr **目前已發行**的授權而言由你自行評估(見 README、NOTICE)。
+- 執行期驅動一個獨立的 Herdr server。**更新（2026-08-04）：Herdr [v0.8.0](https://github.com/herdrdev/herdr/releases/tag/v0.8.0)（2026-08-03）已出貨「改採 Apache-2.0」的 relicense**——已對照該 tag 的 `LICENSE` 檔案驗證;0.8.0 之前安裝的 Herdr 仍為 AGPL-3.0-or-later。herdr-bridge 本身 Apache-2.0，是其獨立 client。網路服務場景的 AGPL 義務,就 Herdr **目前安裝的**授權而言由你自行評估(見 README、NOTICE)。

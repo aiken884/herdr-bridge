@@ -8,7 +8,8 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .superpowers/
-.claude/
+.claude/*
+!.claude/hooks/
 .claude-scratch/
 .codegraph/
 .omo/

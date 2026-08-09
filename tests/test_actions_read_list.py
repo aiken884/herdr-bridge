@@ -67,6 +67,29 @@ def test_read_agent_accepts_pane_id(actions):
     assert out.agent_id == "term_a"
 
 
+def test_read_agent_uses_pane_id_target_on_protocol_19(actions):
+    """2026-08-04 Herdr 0.8.0 finding: protocol 19's agent.read rejects a live
+    agent's terminal_id as target (agent_not_found) even though agent.list
+    reports that same terminal_id; pane_id works. See
+    docs/decisions/pplx-agent-read-terminal-id-0.8.0-20260804.md."""
+    acts, srv, _ = actions
+    acts._protocol = 19
+    out = acts.read_agent("ruler-1", "term_a")
+    assert out.agent_id == "term_a"  # public agent_id semantics unchanged
+    read_req = [r for r in srv.requests if r["method"] == "agent.read"][-1]
+    assert read_req["params"]["target"] == "w1:p1"  # wire target is pane_id, not term_a
+
+
+def test_read_agent_uses_terminal_id_target_off_protocol_19(actions):
+    """Scoped to exactly protocol 19, not >=19 -- a future protocol that fixes
+    this shouldn't silently inherit the workaround."""
+    acts, srv, _ = actions
+    acts._protocol = 20
+    acts.read_agent("ruler-1", "term_a")
+    read_req = [r for r in srv.requests if r["method"] == "agent.read"][-1]
+    assert read_req["params"]["target"] == "term_a"
+
+
 def test_read_unknown_agent_raises(actions):
     acts, _, _ = actions
     with pytest.raises(AgentNotFoundError):

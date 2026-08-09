@@ -29,7 +29,7 @@ def test_idempotency_key_only_depends_on_to_project_and_inbox_ref():
     b = idempotency_key("remagraph", "task-abc")
     assert a == b
     assert a != idempotency_key("remagraph", "task-xyz")
-    assert a != idempotency_key("downstream-tower", "task-abc")
+    assert a != idempotency_key("tower-b", "task-abc")
 
 
 def test_idempotency_key_ignores_message_id_and_timestamp():

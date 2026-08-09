@@ -202,13 +202,13 @@ All contributions require a `Signed-off-by` trailer (`git commit -s`) certifying
 
 ## License
 
-Apache-2.0 (see [`LICENSE`](LICENSE)). herdr-bridge is an independent client of the Herdr socket API: it does not contain, copy, or derive from Herdr source code (see [`NOTICE`](NOTICE)). As of Herdr's last tagged release, Herdr itself is a separate project licensed under AGPL-3.0-or-later — **note that Herdr's own upstream changelog has an "Unreleased" entry announcing a relicense to Apache-2.0, not yet shipped in a tagged version; re-check Herdr's current license before relying on the AGPL-specific guidance below.**
+Apache-2.0 (see [`LICENSE`](LICENSE)). herdr-bridge is an independent client of the Herdr socket API: it does not contain, copy, or derive from Herdr source code (see [`NOTICE`](NOTICE)). **Update (2026-08-04): Herdr's [v0.8.0 release](https://github.com/herdrdev/herdr/releases/tag/v0.8.0) (2026-08-03) confirms the relicense from AGPL-3.0-or-later to Apache-2.0 has now shipped** — verified directly against the `LICENSE` file at that tag. If you are running Herdr 0.8.0+, the AGPL-specific guidance below no longer applies to you. It is retained for anyone still running a pre-0.8.0 (AGPL-3.0-or-later) Herdr install.
 
-That independence claim covers this package's own code — it says nothing about your obligations. Concretely, under Herdr's *currently released* AGPL-3.0-or-later license:
+That independence claim covers this package's own code — it says nothing about your obligations if you're on an older Herdr release. Concretely, under Herdr's *pre-0.8.0* AGPL-3.0-or-later license:
 
 (a) herdr-bridge itself is Apache-2.0 — you may use, modify, and redistribute it under those terms.
-(b) At runtime it drives a local Herdr server, which is a separate program (AGPL-3.0-or-later as of the last tagged release; see the note above) you install and run yourself.
-(c) If you offer a service over a network that runs Herdr as a component (CI bots, SaaS automation, hosted orchestration), AGPL §13's network-use clause may obligate you with respect to *Herdr* — regardless of herdr-bridge's own license. This obligation goes away once Herdr's announced Apache-2.0 relicense actually ships.
+(b) At runtime it drives a local Herdr server, which is a separate program (AGPL-3.0-or-later prior to Herdr 0.8.0) you install and run yourself.
+(c) If you offer a service over a network that runs a pre-0.8.0 Herdr as a component (CI bots, SaaS automation, hosted orchestration), AGPL §13's network-use clause may obligate you with respect to *Herdr* — regardless of herdr-bridge's own license. This obligation does not apply once you upgrade to Herdr 0.8.0+.
 (d) herdr-bridge cannot waive or satisfy those obligations on your behalf; for commercial or networked deployments, evaluate Herdr's *current* license position yourself (and consider legal counsel for enterprise use).
 
 ## Project docs

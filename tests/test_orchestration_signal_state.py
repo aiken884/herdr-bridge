@@ -67,8 +67,8 @@ def test_late_mark_accepted_does_not_regress_an_already_injected_state():
 
 
 def test_mark_accepted_survives_daemon_racing_past_it_between_its_two_reads(monkeypatch):
-    """2026-08-02 field incident (a real downstream deployment repro'd this
-    twice, root-fix request): mark_accepted() reads current state once to decide target_state,
+    """2026-08-02 field incident (reproduced twice on w18:p1 by a downstream
+    tower, root-fix request): mark_accepted() reads current state once to decide target_state,
     but _write_signal_state() internally re-reads current state a SECOND time
     to validate the transition -- two independent reads, not one. Across two
     independent OS processes (outbound.py the sender, daemon.py the receiver)
@@ -201,8 +201,8 @@ def test_mark_escalated_rejects_unknown_reason():
 
 
 def test_mark_escalated_is_a_noop_when_daemon_already_completed_the_send():
-    """2026-08-02 field incident (multiple downstream deployments hit this
-    live): daemon.py calls mark_injected() then mark_completed() back-to-back, so
+    """2026-08-02 field incident (two different downstream towers both hit this live):
+    daemon.py calls mark_injected() then mark_completed() back-to-back, so
     outbound.py's own poll loop can miss the single instant the state equals
     "injected" and observe "completed" instead, or simply still be mid-flight
     when the daemon finishes. Either way outbound.py's timeout fires and it
@@ -224,8 +224,8 @@ def test_mark_escalated_is_a_noop_when_daemon_already_completed_the_send():
 
 
 def test_mark_escalated_survives_daemon_completing_between_precheck_and_write(monkeypatch):
-    """2026-08-02 field incident, the ACTUAL reported bug (repro'd
-    twice in the field, traceback at signal/outbound.py's mark_escalated() call
+    """2026-08-02 field incident, a downstream tower's actual reported bug (repro'd
+    twice on w18:p1, traceback at signal/outbound.py's mark_escalated() call
     site: "Invalid Signal transition: completed -> injection_unconfirmed.
     Allowed: []", exit 1 -- yet `signal status` showed the envelope already
     state=completed). The 2026-08-01 fix (see

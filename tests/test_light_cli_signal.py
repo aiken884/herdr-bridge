@@ -42,38 +42,39 @@ def _parse_and_run(argv):
 # -- _resolve_signal_project ---------------------------------------------------
 
 def test_resolve_signal_project_flag_wins_over_everything(monkeypatch, capsys):
-    monkeypatch.setenv("CT_PROJECT", "other-tower")
-    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "downstream-tower")
+    monkeypatch.setenv("CT_PROJECT", "tower-a")
+    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "tower-b")
     assert cli._resolve_signal_project("RemaGraph") == "RemaGraph"
     assert capsys.readouterr().err == ""  # explicit source given -- no warning
 
 
 def test_resolve_signal_project_uses_ct_project_over_herdr_memory_project(monkeypatch, capsys):
-    # This is the exact bug a real downstream deployment hit in the field: bare `signal start`
+    # This is the exact bug another tower hit in the field: bare `signal start`
     # (no --project) must resolve to the tower's own CT_PROJECT, not fall
     # through to a more general-purpose env var and collide with
     # herdr-bridge's own daemon lock.
-    monkeypatch.setenv("CT_PROJECT", "other-tower")
-    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "downstream-tower")
-    assert cli._resolve_signal_project(None) == "other-tower"
+    monkeypatch.setenv("CT_PROJECT", "tower-a")
+    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "tower-b")
+    assert cli._resolve_signal_project(None) == "tower-a"
     assert capsys.readouterr().err == ""  # CT_PROJECT found -- no warning
 
 
 def test_resolve_signal_project_falls_back_to_herdr_memory_project(monkeypatch, capsys):
     monkeypatch.delenv("CT_PROJECT", raising=False)
-    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "downstream-tower")
-    assert cli._resolve_signal_project(None) == "downstream-tower"
+    monkeypatch.setenv("HERDR_MEMORY_PROJECT", "tower-b")
+    assert cli._resolve_signal_project(None) == "tower-b"
     assert capsys.readouterr().err == ""  # HERDR_MEMORY_PROJECT found -- no warning
 
 
 def test_resolve_signal_project_ignores_remagraph_project_and_warns(monkeypatch, capsys):
     # REMAGRAPH_PROJECT is deliberately NOT in the signal resolution chain
-    # (2026-08-01 field report -- a real bug in the first fix, not a
-    # stylistic choice): `herdr_bridge/__init__.py` unconditionally
-    # force-sets os.environ["REMAGRAPH_PROJECT"] = "herdr-bridge" as an
-    # import-time side effect on every herdr-commander process, clobbering
-    # any value the user exported themselves. Trusting it here would make
-    # the warning below dead code again exactly like it was the first time.
+    # (2026-08-01 a downstream tower's second field report -- a real bug in
+    # the first fix, not a stylistic choice): `herdr_bridge/__init__.py`
+    # unconditionally force-sets os.environ["REMAGRAPH_PROJECT"] = "herdr-bridge"
+    # as an import-time side effect on every herdr-commander process,
+    # clobbering any value the user exported themselves. Trusting it here
+    # would make the warning below dead code again exactly like it was the
+    # first time.
     monkeypatch.delenv("CT_PROJECT", raising=False)
     monkeypatch.delenv("HERDR_MEMORY_PROJECT", raising=False)
     monkeypatch.setenv("REMAGRAPH_PROJECT", "RemaGraph")
@@ -89,13 +90,14 @@ def test_resolve_signal_project_defaults_to_herdr_bridge(monkeypatch, capsys):
 
 
 def test_resolve_signal_project_warns_on_stderr_when_falling_through_to_default(monkeypatch, capsys):
-    # 2026-08-01 follow-up field report: a bare interactive shell
-    # inside a non-herdr-bridge tower's own agent session doesn't inherit
-    # CT_PROJECT at all (each Bash tool call is a fresh shell, not a child of
-    # the bootstrap process) -- so it silently queries herdr-bridge's own
-    # daemon and, if that daemon happens to be alive, reports a misleading
-    # "✅ running" that looks like the caller's own tower. The fallback can't
-    # be made correct in general, so it must at least stop being silent.
+    # 2026-08-01 a downstream tower's follow-up field report: a bare
+    # interactive shell inside a non-herdr-bridge tower's own agent session
+    # doesn't inherit CT_PROJECT at all (each Bash tool call is a fresh
+    # shell, not a child of the bootstrap process) -- so it silently queries
+    # herdr-bridge's own daemon and, if that daemon happens to be alive,
+    # reports a misleading "✅ running" that looks like the caller's own
+    # tower. The fallback can't be made correct in general, so it must at
+    # least stop being silent.
     monkeypatch.delenv("CT_PROJECT", raising=False)
     monkeypatch.delenv("HERDR_MEMORY_PROJECT", raising=False)
     monkeypatch.delenv("REMAGRAPH_PROJECT", raising=False)
@@ -106,20 +108,21 @@ def test_resolve_signal_project_warns_on_stderr_when_falling_through_to_default(
 
 
 def test_signal_status_warns_in_a_real_subprocess_despite_import_time_pollution(tmp_path):
-    # Regression test for a real field report: a unit test that
-    # calls _resolve_signal_project() directly never exercises importing the
-    # herdr_bridge package itself, so it missed that `herdr_bridge/__init__.py`
-    # unconditionally force-sets REMAGRAPH_PROJECT="herdr-bridge" as an
-    # import-time side effect on every real `herdr-commander` invocation --
-    # which made the first version of the warning dead code. Only a real
-    # subprocess (which actually imports the package fresh, the way every
-    # live `herdr-commander` call does) can catch this class of bug.
+    # Regression test for a downstream tower's second field report: a unit
+    # test that calls _resolve_signal_project() directly never exercises
+    # importing the herdr_bridge package itself, so it missed that
+    # `herdr_bridge/__init__.py` unconditionally force-sets
+    # REMAGRAPH_PROJECT="herdr-bridge" as an import-time side effect on every
+    # real `herdr-commander` invocation -- which made the first version of
+    # the warning dead code. Only a real subprocess (which actually imports
+    # the package fresh, the way every live `herdr-commander` call does) can
+    # catch this class of bug.
     # HOME is redirected to tmp_path so this doesn't touch the real
     # ~/.local/state/remagraph-hb-live-herdr-bridge directory.
     env = {"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")}
     # Deliberately set REMAGRAPH_PROJECT ourselves too, proving the
     # import-time assignment clobbers even an explicit user export.
-    env["REMAGRAPH_PROJECT"] = "other-tower"
+    env["REMAGRAPH_PROJECT"] = "tower-a"
 
     result = subprocess.run(
         [sys.executable, "-c",
@@ -130,10 +133,10 @@ def test_signal_status_warns_in_a_real_subprocess_despite_import_time_pollution(
 
 
 def test_signal_start_uses_ct_project_when_no_project_flag_given(monkeypatch):
-    # Integration-level regression test for a real field report: a
-    # bare `signal start` in a non-herdr-bridge tower's environment must
-    # start that tower's own daemon, not herdr-bridge's.
-    monkeypatch.setenv("CT_PROJECT", "other-tower")
+    # Integration-level regression test for a downstream tower's field
+    # report: a bare `signal start` in a non-herdr-bridge tower's environment
+    # must start that tower's own daemon, not herdr-bridge's.
+    monkeypatch.setenv("CT_PROJECT", "tower-a")
     monkeypatch.delenv("HERDR_MEMORY_PROJECT", raising=False)
     seen_projects = []
 
@@ -151,7 +154,7 @@ def test_signal_start_uses_ct_project_when_no_project_flag_given(monkeypatch):
 
     code = _parse_and_run(["signal", "start"])
     assert code == 0
-    assert seen_projects == ["other-tower"]
+    assert seen_projects == ["tower-a"]
 
 
 # -- signal send --------------------------------------------------------------
@@ -500,6 +503,7 @@ def test_signal_start_reports_pane_resolution_failure(monkeypatch, capsys):
     code = _parse_and_run(["signal", "start", "--project", "herdr-bridge"])
     assert code == 1
     assert "no candidate panes" in capsys.readouterr().err
+
 
 # -- signal install-watchdog / uninstall-watchdog ---------------------------
 
