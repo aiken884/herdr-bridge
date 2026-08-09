@@ -27,7 +27,7 @@ dependencies = [
     # CI): a published package resolves the same way everywhere, no special CI
     # handling needed for this dependency itself.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
-    "remagraph>=0.4.0,<0.5",  # compatible-release band, matching the convention below
+    "remagraph>=0.4.0,<0.6",  # compatible-release band, matching the convention below
     # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
     # extra): Aiken's business decision — the fleet's goal is fully headless operation,
     # and this path (dispatching to freshly-spawned headless agent processes) is a
