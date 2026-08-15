@@ -1,0 +1,47 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run python3 .claude/hooks/session_start_compact.py"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && HERDR_COMPACT_LOG_PATH=\"$CLAUDE_PROJECT_DIR/.herdr/compact.log\" uv run python3 .claude/hooks/post_compact_log.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && HERDR_BRIDGE_ROOT=\"$CLAUDE_PROJECT_DIR\" uv run python3 .claude/hooks/leader_harness_pretooluse.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && HERDR_BRIDGE_ROOT=\"$CLAUDE_PROJECT_DIR\" uv run python3 .claude/hooks/leader_harness_posttooluse.py"
+          }
+        ]
+      }
+    ]
+  }
+}

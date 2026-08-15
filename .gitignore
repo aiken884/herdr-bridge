@@ -10,6 +10,7 @@ dist/
 .superpowers/
 .claude/*
 !.claude/hooks/
+!.claude/settings.json
 .claude-scratch/
 .codegraph/
 .omo/
