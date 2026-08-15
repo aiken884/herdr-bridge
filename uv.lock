@@ -505,7 +505,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agent-client-protocol", specifier = ">=0.10.0,<0.12" },
-    { name = "remagraph", specifier = ">=0.4.0,<0.7" },
+    { name = "remagraph", specifier = ">=0.4.0,<0.8" },
 ]
 
 [package.metadata.requires-dev]
@@ -1598,16 +1598,16 @@ wheels = [
 
 [[package]]
 name = "remagraph"
-version = "0.6.1"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mcp" },
     { name = "model2vec" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/3b/3d8d48d5c0aaf9d4bd57e74d09ebe17e6a01d7cdc0bb559a8ea45806ca69/remagraph-0.6.1.tar.gz", hash = "sha256:858739993aaf3c2027300e2bac916cc58a4f2e90544aa66ed4e1bbcc6a2b7527", size = 586879, upload-time = "2026-08-15T03:57:12.83Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/2f/f3ace7822e8dcf8f9f9dc4e4702c947ca33ccf071cdf476d190473926176/remagraph-0.7.0.tar.gz", hash = "sha256:08f76bfe6b4e6efaebedf5f819e0b238c93f4a02a7e1f4c015e0fb955773a206", size = 613108, upload-time = "2026-08-15T07:10:56.771Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/61/31e8843be593814b2cc011e288970ecd6aeb1f60e662104ce33d8061fed4/remagraph-0.6.1-py3-none-any.whl", hash = "sha256:59feb46e45b46bbdecd0e326228aaa2eb188a59e515ea449c0af0957028597d9", size = 134352, upload-time = "2026-08-15T03:57:11.197Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/00/1add87b4ee0f855fbb3fb9aba346b00c970279d6e5dca46a44340123945c/remagraph-0.7.0-py3-none-any.whl", hash = "sha256:41a1eb3955f5d6a94797f2e9d8548ea9d353a4c2d05da2b5ef497f57e1371e02", size = 144606, upload-time = "2026-08-15T07:10:55.407Z" },
 ]
 
 [[package]]

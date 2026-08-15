@@ -27,15 +27,18 @@ dependencies = [
     # CI): a published package resolves the same way everywhere, no special CI
     # handling needed for this dependency itself.
     # RemaGraph powers the Herdr Bridge Memory feature (see docs/memory-advanced.md).
-    "remagraph>=0.4.0,<0.7",  # compatible-release band, matching the convention below.
-    # 2026-08-15: widened from <0.5 to <0.7 to pick up 0.6.1-beta (RemaGraph's own tower
-    # notified herdr-bridge of the release cross-session; claims independently verified
-    # against the real published CHANGELOG before acting, not taken on trust). Verified
-    # compatible before widening: full local test suite against the real PyPI 0.6.1
-    # (uv sync --no-sources, not the local editable checkout) -- 1106 passed, 0 failed,
-    # coverage unchanged (88.45%); ruff/mypy clean; herdr-bridge's own existing
-    # production memory DB opened non-degraded under 0.6.1 (`remagraph status` ->
-    # read_only: false, db_schema_version == server_code_version == 6).
+    "remagraph>=0.4.0,<0.8",  # compatible-release band, matching the convention below.
+    # 2026-08-15: widened <0.5 -> <0.7 (0.6.1-beta) -> <0.8 (0.7.0-beta) across same-day
+    # release notifications from RemaGraph's own tower (cross-session; claims
+    # independently verified against the real published CHANGELOG each time before
+    # acting, not taken on trust -- e.g. confirming 0.7.0 didn't touch any of the 7
+    # RemaGraph APIs herdr-bridge calls directly: db.connect/declare_project_edge,
+    # models.SearchRequest/StoreRequest, search.sanitize_fts5_query/search_memories,
+    # store.process_store). Each widen verified compatible first: full local test
+    # suite against the real published version (uv sync --no-sources, not the local
+    # editable checkout) -- 0.6.1: 1106 passed; 0.7.0: see commit message for the
+    # exact count. ruff/mypy clean each time; herdr-bridge's own production memory DB
+    # confirmed non-degraded (`remagraph status` -> read_only: false).
     # ACP SDK (promoted to a core dependency on 2026-07-25; was previously an optional
     # extra): Aiken's business decision — the fleet's goal is fully headless operation,
     # and this path (dispatching to freshly-spawned headless agent processes) is a

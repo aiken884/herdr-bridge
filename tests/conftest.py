@@ -39,8 +39,19 @@ def _isolate_remagraph_state_dir(tmp_path, monkeypatch):
     dir land inside that test's temp directory. It gets cleaned up along
     with tmp_path when the test ends, so individual test files don't each
     need to remember to isolate themselves manually.
+
+    REMAGRAPH_HOME exception (2026-08-15, found via `remagraph doctor
+    --project herdr-bridge` surfacing a real polluted registry entry
+    pointing at a long-deleted pytest tmp_path): RemaGraph's shared
+    cross-project registry (project_registry.json) resolves its location
+    via REMAGRAPH_HOME, a separate env var independent of HOME (see
+    RemaGraph CHANGELOG 0.3.0-alpha). Isolating only HOME left any test
+    that calls store_memory()/search_memories() free to register its own
+    tmp_path into the real, shared, developer-machine-global registry
+    file, which then outlived the test.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("REMAGRAPH_HOME", str(tmp_path))
     for key in (
         "REMAGRAPH_STATE_DIR",
         "REMAGRAPH_PROJECT",
