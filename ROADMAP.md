@@ -7,19 +7,19 @@ additive or infrastructural.
 
 Roadmap items are tracked as GitHub issues; this file is the high-level view.
 
-## Near term (0.2, additive — signatures stay frozen)
+Last aligned: 2026-08-21 (v0.10.2). The five public signatures remain frozen.
 
-- **`herdr_bridge.testing`** — promote the in-repo `FakeHerdrServer` to a
-  supported public test double, so consumers can unit-test their orchestration
-  against a fake Herdr without a live server.
-- **Read revision cursor** — an optional, backward-compatible parameter so a
-  consumer can ask "what changed since I last read?" instead of re-scanning
-  output.
-- **Submit semantics for `send_to_agent`** — a helper for multi-line / explicit
-  submit, so interactive agent CLIs don't each re-implement the "send text then
-  Enter" dance.
-- **Agent/pane lifecycle helpers** — thin conveniences for opening a pane or
-  starting an agent, so consumers don't have to shell out to the Herdr CLI.
+## Shipped (was “near term 0.2”)
+
+- **`herdr_bridge.testing`** — shipped in 0.2.1 (`FakeHerdrServer`).
+- **Read revision cursor** — shipped in 0.2.2 (`AgentOutput.revision` / `since_revision`).
+- **Submit semantics for `send_to_agent`** — covered in practice by `herdr-commander notify-pane` (0.4.0) and, against Herdr 0.8.0+, `agent.prompt` (0.8.0 / 0.10.1). The frozen `send_to_agent()` signature itself is unchanged.
+- **Agent/pane lifecycle helpers** — still out of the frozen tool-layer surface; use the Herdr CLI / `herdr-commander start` rather than adding new public functions.
+
+## Near term (additive — signatures stay frozen)
+
+- Track Herdr protocol changes with patch releases as needed (0.10.1/0.10.2 is the protocol 20 example).
+- Keep PyPI Trusted Publishing current with Core Metadata as Hatchling/Twine evolve.
 
 ## Ongoing (quality & security)
 
@@ -53,16 +53,19 @@ Roadmap items are tracked as GitHub issues; this file is the high-level view.
 
 路線圖項目都會用 GitHub issue 追蹤；這份文件只是高層次的總覽。
 
-## 近期（0.2，純新增——簽章維持凍結）
+最後對齊：2026-08-21（v0.10.2）。五個公開函式簽章維持凍結。
 
-- **`herdr_bridge.testing`**——把目前放在 repo 裡的 `FakeHerdrServer` 升級成正式支援的公開測試替身，
-  讓使用者可以針對一個假的 Herdr 做單元測試，不需要真的啟動一台 Herdr 伺服器。
-- **讀取用的 revision cursor**——一個選用、向下相容的參數，讓使用者可以直接問「上次讀取之後有什麼
-  變化」，不用每次都重新掃一遍輸出內容。
-- **`send_to_agent` 的送出語意**——提供一個 helper 處理多行輸入／明確送出的情境，讓每一種互動式
-  agent CLI 不用各自重新實作一次「先送文字、再送 Enter」這套動作。
-- **Agent / pane 生命週期輔助函式**——開啟一個 pane 或啟動一個 agent 的輕量便利函式，讓使用者不用
-  自己 shell out 去呼叫 Herdr CLI。
+## 已出貨（原本寫在「近期 0.2」）
+
+- **`herdr_bridge.testing`**——0.2.1 出貨（`FakeHerdrServer`）。
+- **讀取用的 revision cursor**——0.2.2 出貨（`AgentOutput.revision` / `since_revision`）。
+- **`send_to_agent` 的送出語意**——實務上由 `herdr-commander notify-pane`（0.4.0）以及 Herdr 0.8.0+ 的 `agent.prompt`（0.8.0 / 0.10.1）涵蓋。凍結的 `send_to_agent()` 簽章本身不變。
+- **Agent / pane 生命週期輔助函式**——仍不放進凍結工具層；請用 Herdr CLI / `herdr-commander start`，不要為此新增公開函式。
+
+## 近期（純新增——簽章維持凍結）
+
+- 隨 Herdr 協定變動視需要發 patch（0.10.1/0.10.2 即 protocol 20 的例子）。
+- 讓 PyPI Trusted Publishing 跟著 Hatchling/Twine 的 Core Metadata 演進保持可發佈。
 
 ## 持續進行中（品質與安全性）
 

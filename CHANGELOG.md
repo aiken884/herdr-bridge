@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-08-21 — PyPI publish unblock (Core Metadata 2.5)
+
+Library behaviour is unchanged from 0.10.1. The v0.10.1 GitHub release never reached PyPI: Hatchling 1.32 emits Core Metadata 2.5, and the pinned `pypa/gh-action-pypi-publish` (ba38be9e, pre-Twine 7) rejected the wheel as `InvalidDistribution: '2.5' is not a valid metadata version`. Install from PyPI as `herdr-bridge==0.10.2`.
+
+### Fixed
+- Bump `pypa/gh-action-pypi-publish` to v1.14.2 (`dc37677b`), which can publish Core Metadata 2.5. Do not pin Hatchling below 1.32 as a workaround.
+
+### Changed
+- README current status and compatibility notes now cover 0.6–0.10.2 (Herdr 0.8.2 / protocol 20, Command Tower Leader, Signal).
+
 ## [0.10.1] — 2026-08-21 — Herdr 0.8.2 / protocol 20 compatibility
 
 ### Fixed

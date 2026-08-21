@@ -26,7 +26,7 @@ At its core, herdr-bridge is two things:
 
 Built-in memory (recall/store across tasks and agents), multi-layer delivery confirmation (so "sent" actually means "received"), and support for both headless (ACP) and interactive TUI agents are included out of the box — see the sections below for the full picture.
 
-> **Current status**: ACP Router + real downstream agents + embedded Herdr Bridge Memory + CLI router are all complete (4 agents: code/research/echo/general-tui, with dynamic discovery + registration, 407 tests). `herdr-commander run` / `router` / `status` are ready to use.
+> **Current status**: v0.10.2. Tested against Herdr 0.8.2 (socket protocol 20). ACP Router, real downstream agents, embedded Herdr Bridge Memory, Command Tower Leader, and Herdr Bridge Signal are complete. `herdr-commander run` / `router` / `status` / `notify-pane` / `signal` / `memory` are ready to use. The five frozen tool-layer signatures are unchanged.
 
 <details>
 <summary>Table of contents</summary>
@@ -191,6 +191,9 @@ Every call takes an `actor_id`; `send_to_agent` takes a `priority`; `acquire_con
 - **0.3.0 (additive, all prior signatures unchanged)** — `AcpRouter` (`herdr_bridge.acp.router`): the tower acting as both ACP server and client, with dynamic agent registry discovery, four real independent downstream ACP agents, `herdr-commander router {list,discover,route,register,unregister,start}` CLI, and embedded Herdr Bridge Memory coordination across the whole dispatch path. See [`CHANGELOG.md`](CHANGELOG.md).
 - **0.4.0 (additive, all prior signatures unchanged)** — `herdr-commander notify-pane`: the reliable channel for interactive TUI panes (atomic keystroke injection + screen-diff delivery confirmation, per-TUI submit detection, busy/zombie/startup-race guards); `herdr-commander` can now be installed globally via `pipx install --editable <repo>` so any pane on the machine — not just this project's own venvs — can reach any other pane; delivery-state FSM dedicated storage. See [`CHANGELOG.md`](CHANGELOG.md).
 - **0.5.0 (additive, all prior signatures unchanged)** — `agent-client-protocol` promoted from optional extra to a main dependency (Secondary/ACP layer available by default); `notify-pane` `--tui` gained `copilot` and `gemini` brand support; `herdr-commander doctor` one-shot diagnostic. See [`CHANGELOG.md`](CHANGELOG.md).
+- **0.6.0–0.8.0 (additive)** — first public PyPI release and Herdr Bridge Memory branding; Herdr 0.8.0 / protocol 19 wire workaround so `read_agent` / `send_to_agent` / `wait_until` keep working (`agent.prompt` + `pane_id` targeting; public `AgentInfo.agent_id` remains the `terminal_id`). See [`CHANGELOG.md`](CHANGELOG.md).
+- **0.9.0–0.10.0 (additive)** — Command Tower Leader (Task Board, bootstrap, multi-brand Leader Harness) and real committed hook wiring for Copilot / Gemini / opencode / Codex / Grok; Herdr Bridge Signal as a sixth communication layer. See [`CHANGELOG.md`](CHANGELOG.md).
+- **0.10.1 / 0.10.2 (patch)** — Herdr 0.8.2 / protocol 20: the 0.8.0 wire workaround now applies to protocol ≥19, not only `== 19`. `send_to_agent()` raises `AgentPromptRefusedError` when Herdr rejects the prompt as `agent_blocked` / `agent_prompt_stalled`. 0.10.2 is the PyPI-installable build (the v0.10.1 GitHub tag never reached PyPI). See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Quality assurance
 

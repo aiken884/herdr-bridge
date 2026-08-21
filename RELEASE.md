@@ -27,6 +27,9 @@ library's interface.
 5. Create a GitHub Release for the tag with notes from the CHANGELOG. This
    triggers `publish.yml`, which builds and publishes to PyPI via OIDC Trusted
    Publishing (no long-lived token) with provenance attestations.
+   **Packaging note (2026-08-21):** Hatchling 1.32+ emits Core Metadata 2.5.
+   `publish.yml` must pin `pypa/gh-action-pypi-publish` at v1.14.2 or newer
+   (Twine 7). The v0.10.1 tag used an older pin and never reached PyPI.
 6. Verify: `pip index versions herdr-bridge`; smoke-test a clean install.
 
 ## Security releases
@@ -70,6 +73,9 @@ herdr-bridge 遵循 [Semantic Versioning](https://semver.org/)（語意化版本
 5. 針對這個 tag 建立一個 GitHub Release，內容引用 CHANGELOG 的說明。這會觸發 `publish.yml`，
    透過 OIDC Trusted Publishing（不需要長效 token）建置並發佈到 PyPI，同時附上 provenance
    attestation（來源證明）。
+   **套件注意（2026-08-21）**：Hatchling 1.32+ 會產出 Core Metadata 2.5。`publish.yml`
+   必須把 `pypa/gh-action-pypi-publish` 釘在 v1.14.2 或更新（Twine 7）。v0.10.1 tag 用的是
+   舊 pin，因此從未上架 PyPI。
 6. 驗證：跑 `pip index versions herdr-bridge` 確認版本已上架，並做一次乾淨安裝的煙霧測試。
 
 ## 安全性修復的發版
