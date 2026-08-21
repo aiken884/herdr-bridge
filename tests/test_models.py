@@ -9,6 +9,7 @@ import pytest
 import herdr_bridge
 from herdr_bridge.errors import (
     AgentNotFoundError,
+    AgentPromptRefusedError,
     HerdrApiError,
     HerdrBridgeError,
 )
@@ -16,7 +17,7 @@ from herdr_bridge.models import AgentInfo, WaitResult, normalize_read_source
 
 
 def test_version():
-    assert herdr_bridge.__version__ == "0.10.0"
+    assert herdr_bridge.__version__ == "0.10.1"
 
 
 def test_agent_info_is_frozen():
@@ -37,6 +38,13 @@ def test_api_error_carries_code():
 
 def test_agent_not_found_is_api_error():
     assert issubclass(AgentNotFoundError, HerdrApiError)
+
+
+def test_agent_prompt_refused_is_api_error():
+    assert issubclass(AgentPromptRefusedError, HerdrApiError)
+    err = AgentPromptRefusedError("agent_blocked", "agent is blocked")
+    assert err.code == "agent_blocked"
+    assert "AgentPromptRefusedError" in herdr_bridge.__all__
 
 
 def test_normalize_read_source():

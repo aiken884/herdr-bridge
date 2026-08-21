@@ -237,3 +237,35 @@ def test_wait_predicate_wins_over_stalled(fake_herdr, tmp_path):
                         timeout_sec=10, poll_interval_sec=0)
     assert r.success is True
     assert r.reason == "predicate"
+
+
+def _output_matched_sub(srv):
+    sub_req = next(r for r in srv.requests if r["method"] == "events.subscribe")
+    subs = sub_req["params"]["subscriptions"]
+    return next(s for s in subs if s.get("type") == "pane.output_matched")
+
+
+def test_wait_subscribe_omits_match_on_protocol_16(wired):
+    """Protocol 16's pane.output_matched subscription has no required match."""
+    acts, srv = wired
+    acts._protocol = 16
+    srv.set_handler("agent.read", lambda p: {"text": "still working"})
+    acts.wait_until("ruler-1", "term_a", lambda o: False,
+                    timeout_sec=0, poll_interval_sec=0)
+    matched = _output_matched_sub(srv)
+    assert "match" not in matched
+    assert matched["pane_id"] == "w1:p1"
+
+
+@pytest.mark.parametrize("protocol", [19, 20])
+def test_wait_subscribe_includes_match_on_protocol_ge_19(wired, protocol):
+    """Protocol >= 19 requires match on pane.output_matched (0.8.0 finding,
+    still true on 0.8.2 / protocol 20)."""
+    acts, srv = wired
+    acts._protocol = protocol
+    srv.set_handler("agent.read", lambda p: {"text": "still working"})
+    acts.wait_until("ruler-1", "term_a", lambda o: False,
+                    timeout_sec=0, poll_interval_sec=0)
+    matched = _output_matched_sub(srv)
+    assert matched["match"] == {"type": "regex", "value": ".*"}
+    assert matched["pane_id"] == "w1:p1"

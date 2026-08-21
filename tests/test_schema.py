@@ -8,7 +8,12 @@ import pytest
 
 from herdr_bridge.client import SocketClient
 from herdr_bridge.errors import SchemaVersionError
-from herdr_bridge.schema import SchemaStore, check_server_compat, fetch_schema_via_cli
+from herdr_bridge.schema import (
+    SchemaStore,
+    check_server_compat,
+    fetch_schema_via_cli,
+    uses_post19_agent_wire,
+)
 
 MINI_SCHEMA = {
     "protocol": 16,
@@ -67,6 +72,16 @@ def test_validate_bad_enum():
         store.validate_request("pane.read", {"pane_id": "w1:p1", "source": "recent-unwrapped"})
 
 
+def test_uses_post19_agent_wire_gate():
+    """Protocol 16 keeps the original agent.send contract; >= 19 uses
+    agent.prompt + pane_id. None (unknown) must not guess the new contract."""
+    assert uses_post19_agent_wire(None) is False
+    assert uses_post19_agent_wire(16) is False
+    assert uses_post19_agent_wire(18) is False
+    assert uses_post19_agent_wire(19) is True
+    assert uses_post19_agent_wire(20) is True
+
+
 def test_server_compat_ok(fake_herdr):
     info = check_server_compat(SocketClient(fake_herdr.socket_path))
     assert info["protocol"] == 16
@@ -84,9 +99,23 @@ def test_server_compat_rejects_older_protocol(fake_herdr):
     assert "below minimum supported" in str(exc.value)
 
 
+def test_server_compat_protocol_20_is_tested(fake_herdr, caplog):
+    """Herdr 0.8.2 / protocol 20 was probed 2026-08-21; it is inside the
+    tested range after MAX_TESTED_PROTOCOL bumped to 20."""
+    fake_herdr.set_handler(
+        "ping", lambda p: {"type": "pong", "version": "0.8.2", "protocol": 20,
+                           "capabilities": {}})
+    import logging
+    with caplog.at_level(logging.WARNING, logger="herdr_bridge.schema"):
+        info = check_server_compat(SocketClient(fake_herdr.socket_path))
+    assert info["protocol"] == 20
+    assert info["protocol_compat"] == "tested"
+    assert not any("untested-compat" in r.getMessage() for r in caplog.records)
+
+
 def test_server_compat_warns_but_allows_newer_protocol(fake_herdr, caplog):
     fake_herdr.set_handler(
-        "ping", lambda p: {"type": "pong", "version": "0.9", "protocol": 20,
+        "ping", lambda p: {"type": "pong", "version": "0.9", "protocol": 21,
                            "capabilities": {}})
     import logging
     with caplog.at_level(logging.WARNING, logger="herdr_bridge.schema"):
@@ -96,7 +125,7 @@ def test_server_compat_warns_but_allows_newer_protocol(fake_herdr, caplog):
     # the message is caught (kills check_server_compat mutmut_18/20)
     assert any(
         r.getMessage() == (
-            "herdr server protocol 20 is newer than the last tested protocol 19; "
+            "herdr server protocol 21 is newer than the last tested protocol 20; "
             "continuing in untested-compat mode — update herdr-bridge if you hit issues"
         )
         for r in caplog.records

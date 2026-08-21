@@ -23,7 +23,12 @@ from typing import Any, Self
 from herdr_bridge.audit import AuditLogger
 from herdr_bridge.cache import SessionCache
 from herdr_bridge.client import SocketClient, detect_socket_path
-from herdr_bridge.errors import AgentNotFoundError, ControlLeaseError
+from herdr_bridge.errors import (
+    AgentNotFoundError,
+    AgentPromptRefusedError,
+    ControlLeaseError,
+    HerdrApiError,
+)
 from herdr_bridge.models import (
     AgentInfo,
     AgentOutput,
@@ -31,7 +36,7 @@ from herdr_bridge.models import (
     SendResult,
     WaitResult,
 )
-from herdr_bridge.schema import PROTOCOL_AGENT_TARGET_REGRESSION, check_server_compat
+from herdr_bridge.schema import check_server_compat, uses_post19_agent_wire
 
 logger = logging.getLogger("herdr_bridge.actions")
 
@@ -134,7 +139,7 @@ class BridgeActions:
         self._socket_source = "unknown"
         # Set by the connect() factory from check_server_compat()'s ping(); an
         # instance built directly (not via connect()) doesn't know its server's
-        # protocol, so the protocol-19 agent.read/agent.send workaround below
+        # protocol, so the protocol>=19 agent.read/agent.prompt workaround below
         # stays off (falls through to unconditional pre-0.8.0 behavior) rather
         # than guessing.
         self._protocol: int | None = None
@@ -168,16 +173,16 @@ class BridgeActions:
         return info
 
     def _agent_target(self, info: AgentInfo) -> str:
-        """The `target` value to actually put on the wire for agent.read/agent.send.
+        """The `target` value to actually put on the wire for agent.read/agent.prompt.
 
         Normally this is just info.agent_id (the terminal_id) -- the documented,
-        frozen public semantics. On protocol 19 specifically (schema.py's
-        PROTOCOL_AGENT_TARGET_REGRESSION), the server rejects terminal_id targets
-        with agent_not_found; pane_id works. AgentInfo.agent_id itself is left
+        frozen public semantics. On protocol >= 19 (schema.py's
+        uses_post19_agent_wire), the server rejects terminal_id targets with
+        agent_not_found; pane_id works. AgentInfo.agent_id itself is left
         untouched either way, so callers who stored/compared that value see no
         change.
         """
-        if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION:
+        if uses_post19_agent_wire(self._protocol):
             return info.pane_id
         return info.agent_id
 
@@ -222,12 +227,17 @@ class BridgeActions:
     def send_to_agent(self, actor_id: str, agent_id: str, text: str,
                       priority: int = 0) -> SendResult:
         info = self._resolve_or_raise(agent_id)
-        # protocol 19: the agent.send method itself no longer exists on the wire
-        # (invalid_request: unknown variant agent.send) -- agent.prompt is the
-        # replacement, and it has the same terminal_id-target regression as
-        # agent.read (see PROTOCOL_AGENT_TARGET_REGRESSION / _agent_target above).
-        method = "agent.prompt" if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION else "agent.send"
-        self._client.request(method, {"target": self._agent_target(info), "text": text})
+        # protocol >= 19: the agent.send method itself no longer exists on the
+        # wire (invalid_request: unknown variant agent.send) -- agent.prompt is
+        # the replacement, and it has the same terminal_id-target break as
+        # agent.read (see uses_post19_agent_wire / _agent_target above).
+        method = "agent.prompt" if uses_post19_agent_wire(self._protocol) else "agent.send"
+        try:
+            self._client.request(method, {"target": self._agent_target(info), "text": text})
+        except HerdrApiError as exc:
+            if exc.code in ("agent_blocked", "agent_prompt_stalled"):
+                raise AgentPromptRefusedError(exc.code, exc.message) from exc
+            raise
         result = SendResult(ok=True, agent_id=info.agent_id, actor_id=actor_id,
                             priority=priority,
                             sent_at=datetime.now(UTC))
@@ -355,13 +365,12 @@ class BridgeActions:
             subs: list[dict[str, Any]] = [
                 {"type": "pane.agent_status_changed", "pane_id": info.pane_id},
                 # broad output_matched subscription; the callback filters via normalized + predicate
-                # (supports any marker). protocol 19 made `match` a required field where it used to
-                # be absent/optional (2026-08-04 Herdr 0.8.0 finding); scoped to exactly protocol 19
-                # like the other 0.8.0 workarounds above, so protocol 16 keeps its existing,
-                # already-working subscription shape untouched.
+                # (supports any marker). protocol >= 19 made `match` a required field where it used
+                # to be absent/optional (2026-08-04 Herdr 0.8.0 finding, still true on 0.8.2);
+                # protocol 16 keeps its existing, already-working subscription shape untouched.
                 {"type": "pane.output_matched", "pane_id": info.pane_id, "source": "recent",
                  **({"match": {"type": "regex", "value": ".*"}}
-                    if self._protocol == PROTOCOL_AGENT_TARGET_REGRESSION else {})},
+                    if uses_post19_agent_wire(self._protocol) else {})},
             ]
             sub = self._client.subscribe(subs, on_event=_wait_on_event)
             if not sub.wait_connected(3.0):

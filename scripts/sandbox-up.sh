@@ -27,10 +27,44 @@ done
 export HERDR_SOCKET_PATH="$BT_SOCK"
 
 say "3/6 Creating workspace and test panes..."
+# Herdr 0.8.0 changed `agent start`'s CLI/socket contract: it no longer opens a new
+# pane from a raw --cwd + -- <executable> argv; it now requires an *existing* pane
+# (already at an interactive shell prompt) plus an enumerated --kind, and attaches
+# the agent there. `workspace create`'s root pane is already such a shell prompt, so
+# we start the claude agent in it directly, then `pane split` for the second plain
+# shell pane (no --kind: it isn't an agent).
 mkdir -p "$WORKDIR"
-herdr workspace create --cwd "$WORKDIR" --label sandbox >/dev/null
-herdr agent start test-claude --cwd "$WORKDIR" -- claude >/dev/null
-herdr agent start tester --cwd "$WORKDIR" -- bash >/dev/null
+ROOT_PANE=$(herdr workspace create --cwd "$WORKDIR" --label sandbox | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['root_pane']['pane_id'])")
+# A freshly created pane's shell isn't immediately ready for `agent start` to attach
+# to — without this, herdr 0.8.0 rejects it with agent_pane_busy ("not an available
+# shell"). One second is enough in practice; retried once as a safety margin.
+sleep 1
+# Herdr 0.8.2: agent start returns agent_not_ready (non-zero) when Claude is
+# blocked on the trust screen, but the named agent IS already launched.
+# Retrying then hits agent_name_taken. Both mean "already up" — do not abort.
+# Unknown start errors still fail the script (set -e stays on around this).
+_start_agent() {
+  local out rc
+  set +e
+  out=$(herdr agent start test-claude --kind claude --pane "$ROOT_PANE" 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  if echo "$out" | grep -Eq 'agent_not_ready|agent_name_taken'; then
+    say "agent start: already launched ($out)"
+    return 0
+  fi
+  echo "$out"
+  return "$rc"
+}
+if ! _start_agent; then
+  say "agent start failed once, retrying..."
+  sleep 2
+  _start_agent
+fi
+herdr pane split --pane "$ROOT_PANE" --direction down --cwd "$WORKDIR" >/dev/null
 sleep 3
 
 if [ "$NO_TRUST" != "--no-trust" ]; then

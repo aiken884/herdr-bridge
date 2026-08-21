@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-08-21 — Herdr 0.8.2 / protocol 20 compatibility
+
+### Fixed
+- **Herdr 0.8.2 / protocol 20 broke the 0.8.0 wire workaround** because it was scoped to `protocol == 19`. 0.8.2 kept all three breaks (`agent.read` rejects `terminal_id`, `agent.send` is gone, `pane.output_matched` requires `match`) while bumping protocol to 20, so `read_agent()` / `send_to_agent()` / `wait_until()` failed against a current Herdr. The gate is now protocol ≥ 19; protocol 16 is unchanged. `send_to_agent()` maps `agent_blocked` / `agent_prompt_stalled` from `agent.prompt` to `AgentPromptRefusedError` instead of returning `ok=True`. `scripts/sandbox-up.sh` treats `agent_not_ready` / `agent_name_taken` as “already launched” on the trust screen. `MAX_TESTED_PROTOCOL` is 20.
+
 ## [0.10.0] — 2026-08-09 — Leader Harness: real multi-brand hook wiring
 
 ### Added

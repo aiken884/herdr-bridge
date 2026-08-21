@@ -114,8 +114,9 @@ Sends text to the specified agent's input (equivalent to typing into that pane a
 
 - **Parameters**: `actor_id`, `agent_id` (same as `read_agent`), `text` (the raw text to send), `priority` (a **reserved** arbitration-priority field; semantics covered in Reserved Fields — the tool layer records it verbatim and never reorders or preempts based on it).
 - **Returns**: `SendResult` — `ok` / `agent_id` / `actor_id` / `priority` (echoed back exactly as passed in) / `sent_at` (a UTC-aware `datetime`).
-- **Raises**: `AgentNotFoundError` — `agent_id` could not be resolved.
-- **Audit record**: `action="send_to_agent"`, with extra fields `agent_id`, `priority`, `chars=<len(text)>` (again, only the character count is recorded, never the text itself).
+- **Raises**: `AgentNotFoundError` — `agent_id` could not be resolved. `AgentPromptRefusedError` (a `HerdrApiError` subclass, added in 0.10.1) — Herdr 0.8.2+ rejected the prompt because the agent is already `blocked` or `agent_prompt_stalled`; nothing was typed and Enter was not sent. Other wire errors still raise `HerdrApiError`.
+- **Wire contract**: on Herdr protocol 16 the call uses `agent.send` with a `terminal_id` target; on protocol ≥ 19 it uses `agent.prompt` with a `pane_id` target. Public `agent_id` remains the `terminal_id`.
+- **Audit record**: `action="send_to_agent"`, with extra fields `agent_id`, `priority`, `chars=<len(text)>` (again, only the character count is recorded, never the text itself). Successful sends only.
 
 ```python
 result = actions.send_to_agent("rule:dashboard", "term_abc123", "run tests", priority=3)
@@ -131,7 +132,7 @@ def get_agent_status(self, actor_id: str, agent_id: str) -> AgentStatus
 Queries the specified agent's current Herdr status value, without applying any semantic interpretation to it.
 
 - **Parameters**: `actor_id` — caller identity (recorded only); `agent_id` — same as `read_agent`.
-- **Returns**: `AgentStatus` — `Literal["idle", "working", "blocked", "done", "unknown"]`. **Note**: `idle` does not guarantee the agent has actually "finished" — Claude Code's confirmation prompts also report as `idle` (see the README's Status semantics caveat). `blocked` means Herdr has detected the agent waiting on external input (e.g. an approval dialog). This function faithfully reports Herdr's native value only — whether it warrants intervention is left to the caller to decide.
+- **Returns**: `AgentStatus` — `Literal["idle", "working", "blocked", "done", "unknown", "agent_prompt_stalled"]`. **Note**: `idle` does not guarantee the agent has actually "finished". On Herdr ≤ 0.7.5 a Claude Code trust-folder prompt was a confirmed false-idle case; **Herdr 0.8.2 reports that same prompt as `blocked`** (still do not treat `idle` as "done" — see the README's Status semantics caveat). `blocked` means Herdr has detected the agent waiting on external input. This function faithfully reports Herdr's native value only — whether it warrants intervention is left to the caller to decide.
 - **Raises**: `AgentNotFoundError` — `agent_id` could not be resolved (including after a snapshot refresh).
 - **Audit record**: `action="get_agent_status"`, with extra fields `agent_id`, `status`.
 
@@ -503,8 +504,9 @@ def send_to_agent(
 
 - **參數**：`actor_id`、`agent_id`（同 `read_agent`）、`text`（送出的原始文字）、`priority`（仲裁優先權**預留欄位**，語意見〈預留欄位〉節；工具層原樣記錄、不排序不插隊）。
 - **回傳**：`SendResult`——`ok`／`agent_id`／`actor_id`／`priority`（原樣回傳呼叫時傳入的值）／`sent_at`（UTC-aware `datetime`）。
-- **例外**：`AgentNotFoundError`——`agent_id` 無法解析。
-- **Audit 記錄**：`action="send_to_agent"`，附加欄位 `agent_id`、`priority`、`chars=<len(text)>`（同樣只記字數，不記文字本文）。
+- **例外**：`AgentNotFoundError`——`agent_id` 無法解析。`AgentPromptRefusedError`（`HerdrApiError` 子類，0.10.1 新增）——Herdr 0.8.2+ 因 agent 已是 `blocked` 或 `agent_prompt_stalled` 而拒絕 prompt，沒有打字也沒有送 Enter。其他線上錯誤仍拋 `HerdrApiError`。
+- **線上契約**：Herdr protocol 16 走 `agent.send` + `terminal_id` target；protocol ≥ 19 走 `agent.prompt` + `pane_id` target。公開 `agent_id` 仍是 `terminal_id`。
+- **Audit 記錄**：`action="send_to_agent"`，附加欄位 `agent_id`、`priority`、`chars=<len(text)>`（同樣只記字數，不記文字本文）。僅成功送出時寫入。
 
 ```python
 result = actions.send_to_agent("rule:dashboard", "term_abc123", "run tests", priority=3)
@@ -520,7 +522,7 @@ def get_agent_status(self, actor_id: str, agent_id: str) -> AgentStatus
 查詢指定 agent 目前的 Herdr 狀態值，不對狀態做任何語意判斷。
 
 - **參數**：`actor_id`——呼叫者身份（僅記錄）；`agent_id`——同 `read_agent`。
-- **回傳**：`AgentStatus`——`Literal["idle", "working", "blocked", "done", "unknown"]`。**注意**：`idle` 不保證 agent 已「完成」；Claude Code 的等待確認提示也會回報 `idle`（見 README〈Status semantics caveat〉）。`blocked` 表示 Herdr 偵測到 agent 正在等待外部輸入（如審批對話框）。本函式僅忠實回報 Herdr 原生值——是否需介入處理由呼叫端自行判斷。
+- **回傳**：`AgentStatus`——`Literal["idle", "working", "blocked", "done", "unknown", "agent_prompt_stalled"]`。**注意**：`idle` 不保證 agent 已「完成」。Herdr ≤ 0.7.5 上 Claude Code 信任資料夾確認畫面是已實測的誤報 idle；**Herdr 0.8.2 對同一畫面改報 `blocked`**（仍不要把 `idle` 當「完成」——見 README〈Status semantics caveat〉）。`blocked` 表示 Herdr 偵測到 agent 正在等待外部輸入。本函式僅忠實回報 Herdr 原生值——是否需介入處理由呼叫端自行判斷。
 - **例外**：`AgentNotFoundError`——`agent_id` 無法解析（含補快照後仍不存在）。
 - **Audit 記錄**：`action="get_agent_status"`，附加欄位 `agent_id`、`status`。
 

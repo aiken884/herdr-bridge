@@ -10,6 +10,7 @@ from herdr_bridge.actions import BridgeActions, ControlHandle, connect
 from herdr_bridge.audit import get_audit_log_path
 from herdr_bridge.errors import (
     AgentNotFoundError,
+    AgentPromptRefusedError,
     ControlLeaseError,
     HerdrApiError,
     HerdrBridgeError,
@@ -66,13 +67,14 @@ except HerdrMemoryError as _exc:
 
 logger = logging.getLogger("herdr_bridge")
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 __all__ = [
     "AcpRouter",
     "AgentInfo",
     "AgentNotFoundError",
     "AgentOutput",
+    "AgentPromptRefusedError",
     "AgentStatus",
     "BridgeActions",
     "CentralTower",

@@ -33,23 +33,31 @@ from herdr_bridge.errors import SchemaError, SchemaVersionError
 logger = logging.getLogger("herdr_bridge.schema")
 
 MIN_SUPPORTED_PROTOCOL = 16
-MAX_TESTED_PROTOCOL = 19
+MAX_TESTED_PROTOCOL = 20
 
 # Herdr 0.8.0 (protocol 19) live-machine findings, 2026-08-04 (see
-# docs/decisions/pplx-agent-read-terminal-id-0.8.0-20260804.md and the
-# upstream issue draft in docs/decisions/). Three related wire-level breaks,
-# all gated on this same constant in actions.py:
+# docs/decisions/pplx-agent-read-terminal-id-0.8.0-20260804.md). Three related
+# wire-level breaks, all gated on this same constant in actions.py:
 #   1. agent.read/agent.prompt reject a live agent's terminal_id as `target`
 #      (agent_not_found) even though agent.list reports that same terminal_id
 #      as the agent's stable id; the agent's pane_id works as target instead.
-#   2. the `agent.send` method present in protocol 16 no longer exists in
-#      protocol 19 -- agent.prompt is the replacement (and has break #1 too).
+#   2. the `agent.send` method present in protocol 16 no longer exists --
+#      agent.prompt is the replacement (and has break #1 too).
 #   3. events.subscribe's pane.output_matched subscription type now requires
 #      a `match` field that used to be absent/optional.
-# Scoped to exactly protocol 19 (not >=19): these are treated as a probable
-# upstream regression, not an intentional new contract, so they must not
-# silently swallow a real fix landing in a future protocol.
+# First observed on protocol 19. Re-probed on Herdr 0.8.2 / protocol 20
+# (2026-08-21): all three still hold, so the gate is protocol >= 19 (protocol
+# 16 keeps the original contract). See docs/decisions/herdr-0.8.2-impact-20260821.md.
 PROTOCOL_AGENT_TARGET_REGRESSION = 19
+
+
+def uses_post19_agent_wire(protocol: int | None) -> bool:
+    """Whether this server uses the 0.8.0+ agent-method contract.
+
+    Protocol 16: agent.send + terminal_id target, output_matched without match.
+    Protocol >= 19: agent.prompt + pane_id target, output_matched requires match.
+    """
+    return isinstance(protocol, int) and protocol >= PROTOCOL_AGENT_TARGET_REGRESSION
 
 
 def fetch_schema_via_cli(herdr_bin: str = "herdr") -> dict[str, Any]:

@@ -32,6 +32,11 @@ class AgentNotFoundError(HerdrApiError):
     """The target agent/pane doesn't exist (code: pane_not_found / agent_not_found, etc.)."""
 
 
+class AgentPromptRefusedError(HerdrApiError):
+    """The server refused agent.prompt without delivering the text
+    (code: agent_blocked / agent_prompt_stalled). Not a successful send."""
+
+
 class SchemaVersionError(HerdrBridgeError):
     """The server's protocol/schema version is outside what this library supports."""
 

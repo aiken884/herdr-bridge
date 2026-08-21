@@ -80,11 +80,23 @@ def test_read_agent_uses_pane_id_target_on_protocol_19(actions):
     assert read_req["params"]["target"] == "w1:p1"  # wire target is pane_id, not term_a
 
 
-def test_read_agent_uses_terminal_id_target_off_protocol_19(actions):
-    """Scoped to exactly protocol 19, not >=19 -- a future protocol that fixes
-    this shouldn't silently inherit the workaround."""
+@pytest.mark.parametrize("protocol", [19, 20])
+def test_read_agent_uses_pane_id_target_on_protocol_ge_19(actions, protocol):
+    """0.8.2 (protocol 20) kept the 0.8.0 terminal_id-target break; the
+    workaround is protocol >= 19, not equality-to-19. Public agent_id is
+    still the terminal_id."""
     acts, srv, _ = actions
-    acts._protocol = 20
+    acts._protocol = protocol
+    out = acts.read_agent("ruler-1", "term_a")
+    assert out.agent_id == "term_a"
+    read_req = [r for r in srv.requests if r["method"] == "agent.read"][-1]
+    assert read_req["params"]["target"] == "w1:p1"
+
+
+def test_read_agent_uses_terminal_id_target_on_protocol_16(actions):
+    """Protocol 16 keeps the original wire contract: target is terminal_id."""
+    acts, srv, _ = actions
+    acts._protocol = 16
     acts.read_agent("ruler-1", "term_a")
     read_req = [r for r in srv.requests if r["method"] == "agent.read"][-1]
     assert read_req["params"]["target"] == "term_a"
